@@ -1,0 +1,13 @@
+do_train: True
+output_dir: results/qe_da/testing
+max_seq_len: 50
+task: qe_da   # qe_da = task 1, qe_hter = task 2
+train:
+  batchsize: 32
+  epochs: 1
+  pair: [en, de]
+test:
+  batchsize: 32
+  pairs:
+    - [en, de]
+    - [en, zh]
