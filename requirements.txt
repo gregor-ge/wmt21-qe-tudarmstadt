@@ -3,3 +3,4 @@ adapter-transformers
 scipy
 numpy
 pyyaml
+sentencepiece
