@@ -46,8 +46,8 @@ def train(config):
     model.load_adapter(f"{train_lang1}/wiki@ukp")
     model.load_adapter(f"{train_lang2}/wiki@ukp")
 
-    model.set_active_adapters(ac.Stack(ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task))
     model.train_adapter([task])
+    model.set_active_adapters([ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task])
 
     dataset = load_data(train_lang1, train_lang2, task, config)
 
