@@ -12,8 +12,8 @@ import transformers.adapters.composition as ac
 from datasets import load_dataset, Dataset, DatasetDict
 import logging
 
-logger = logging.getLogger(__name__)
-
+logger = logging.getLogger()
+logger.setLevel(logging.DEBUG)
 
 def main(config):
     if config.get("wandb_project", ""):
@@ -94,9 +94,9 @@ def test(config, model=None, task_folder=None):
         model.load_adapter(config["adapter_path"], model_name=task)
     if not task_folder:
         task_folder = f"{config.get('task_name', '')}{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
-        output_dir = os.path.join(config["output_dir"], task_folder)
-        os.makedirs(output_dir, exist_ok=True)
-        logger.info(f"Saving results in {output_dir}")
+    output_dir = os.path.join(config["output_dir"], task_folder)
+    os.makedirs(output_dir, exist_ok=True)
+    logger.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
     for pair in config["test"]["pairs"]:
         lang1 = pair[0]
@@ -106,7 +106,7 @@ def test(config, model=None, task_folder=None):
         model.load_adapter(f"{lang1}/wiki@ukp")
         model.load_adapter(f"{lang2}/wiki@ukp")
 
-        model.set_active_adapters(ac.Stack(ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task))
+        model.set_active_adapters([ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task])
 
         eval_trainer = Trainer(
             model=model,
