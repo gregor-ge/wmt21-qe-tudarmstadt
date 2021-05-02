@@ -16,6 +16,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 
 def main(config):
+    os.environ["WANDB_WATCH"] = "false"
     if config.get("wandb_project", ""):
         os.environ["WANDB_PROJECT"] = config["wandb_project"]
     if config.get("do_train", True):
@@ -26,7 +27,7 @@ def main(config):
 
 def train(config):
     logger.info(config)
-    task_folder = f"{config.get('task_name', '')}{config['task']}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+    task_folder = f"train_{config.get('task_name', '')}{config['task']}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"Saving results in {output_dir}")
@@ -54,6 +55,7 @@ def train(config):
     training_args = TrainingArguments(
         learning_rate=train_config.get("learning_rate", 0.0001),
         num_train_epochs=train_config["epochs"],
+        max_steps=train_config.get("max_steps", -1),
         per_device_train_batch_size=train_config.get("train_batchsize", 16),
         per_device_eval_batch_size=train_config.get("dev_batchsize", 32),
         logging_steps=train_config.get("logging_steps", 10),
@@ -65,7 +67,8 @@ def train(config):
         evaluation_strategy="steps",
         load_best_model_at_end=True,
         run_name=task_folder,
-        report_to=train_config.get("report_to", "all")
+        report_to=config.get("report_to", "all"),
+        skip_memory_metrics=config.get("skip_memory_metrics", True)
     )
 
     trainer = Trainer(
@@ -93,7 +96,7 @@ def test(config, model=None, task_folder=None):
         model = XLMRobertaModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
         model.load_adapter(config["adapter_path"], model_name=task)
     if not task_folder:
-        task_folder = f"{config.get('task_name', '')}{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+        task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"Saving results in {output_dir}")
@@ -110,14 +113,18 @@ def test(config, model=None, task_folder=None):
 
         eval_trainer = Trainer(
             model=model,
-            args=TrainingArguments(output_dir=output_dir, remove_unused_columns=False, per_device_eval_batch_size=config["test"]["batchsize"]),
+            args=TrainingArguments(output_dir=output_dir,
+                                   remove_unused_columns=False,
+                                   per_device_eval_batch_size=config["test"]["batchsize"],
+                                   run_name=task_folder,
+                                   report_to=config.get("report_to", "all"),
+                                   skip_memory_metrics=config.get("skip_memory_metrics", True)),
             eval_dataset=dataset["test"],
-            compute_metrics=compute_pearson,
-            run_name=task_folder
+            compute_metrics=compute_pearson
         )
         evaluation = eval_trainer.evaluate(metric_key_prefix="test")
         logger.info(evaluation)
-        json.dump(evaluation, open(os.path.join(output_dir, f"da_{lang1}_{lang2}.json", "w")))
+        json.dump(evaluation, open(os.path.join(output_dir, f"da_{lang1}_{lang2}.json"), "w"))
 
 
 def load_data(lang1, lang2, task, config):
