@@ -1,20 +1,24 @@
 wandb_project: wmt21-qe # optional
 do_train: True
 output_dir: results/qe_da/testing
+adapter_path: path/to/trained/adapter
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
+report_to: none
 train:
   train_batchsize: 16
   eval_batchsize: 32
-  report_to: none
+  max_steps: 1000
   logging_steps: 10
   eval_steps: 250
   gradient_accumulation_steps: 1
+  save_total_limit: 2
   amp: True
   epochs: 1
   pair: [en, de]
 test:
   batchsize: 32
   pairs:
+    - [et, en]
     - [en, de]
     - [en, zh]

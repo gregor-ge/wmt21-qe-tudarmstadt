@@ -66,6 +66,7 @@ def train(config):
         eval_steps=train_config.get("eval_steps", 250),
         evaluation_strategy="steps",
         load_best_model_at_end=True,
+        save_total_limit=train_config.get("save_total_limit", None),
         run_name=task_folder,
         report_to=config.get("report_to", "all"),
         skip_memory_metrics=config.get("skip_memory_metrics", True)
