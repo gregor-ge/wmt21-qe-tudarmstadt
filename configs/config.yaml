@@ -5,6 +5,8 @@ adapter_path: path/to/trained/adapter
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
 report_to: none
+madx2: False
+#prompt: [original, translation]
 train:
   train_batchsize: 16
   eval_batchsize: 32
@@ -19,6 +21,10 @@ train:
 test:
   batchsize: 32
   pairs:
-    - [et, en]
     - [en, de]
     - [en, zh]
+    - [et, en]
+#    - [ne, en] #missing
+#   - [ro, en]
+#   - [ru, en]
+#   - [si, en]

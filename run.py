@@ -46,9 +46,9 @@ def train(config):
     logger.info(f"Training for {task} {train_lang1}-{train_lang2}")
     model.load_adapter(f"{train_lang1}/wiki@ukp")
     model.load_adapter(f"{train_lang2}/wiki@ukp")
-
     model.train_adapter([task])
-    model.set_active_adapters([ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task])
+    skip_layer = [11] if config.get("madx2", False) else []
+    model.set_active_adapters([ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task], skip_layers=skip_layer)
 
     dataset = load_data(train_lang1, train_lang2, task, config)
 
@@ -102,6 +102,7 @@ def test(config, model=None, task_folder=None):
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
+    results = {"dev": [], "test": [], "task": task}
     for pair in config["test"]["pairs"]:
         lang1 = pair[0]
         lang2 = pair[1]
@@ -110,9 +111,24 @@ def test(config, model=None, task_folder=None):
         model.load_adapter(f"{lang1}/wiki@ukp")
         model.load_adapter(f"{lang2}/wiki@ukp")
 
-        model.set_active_adapters([ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task])
+        skip_layer = [11] if config.get("madx2", False) else []
+        model.set_active_adapters([ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task], skip_layers=skip_layer)
 
-        eval_trainer = Trainer(
+        dev_trainer = Trainer(
+            model=model,
+            args=TrainingArguments(output_dir=output_dir,
+                                   remove_unused_columns=False,
+                                   per_device_eval_batch_size=config["test"]["batchsize"],
+                                   run_name=task_folder,
+                                   report_to=config.get("report_to", "all"),
+                                   skip_memory_metrics=config.get("skip_memory_metrics", True)),
+            eval_dataset=dataset["dev"],
+            compute_metrics=compute_pearson
+        )
+        dev_evaluation = dev_trainer.evaluate(metric_key_prefix="dev")
+        dev_evaluation["pair"] = f"{lang1}_{lang2}"
+        results["dev"].append(dev_evaluation)
+        test_trainer = Trainer(
             model=model,
             args=TrainingArguments(output_dir=output_dir,
                                    remove_unused_columns=False,
@@ -123,9 +139,11 @@ def test(config, model=None, task_folder=None):
             eval_dataset=dataset["test"],
             compute_metrics=compute_pearson
         )
-        evaluation = eval_trainer.evaluate(metric_key_prefix="test")
-        logger.info(evaluation)
-        json.dump(evaluation, open(os.path.join(output_dir, f"da_{lang1}_{lang2}.json"), "w"))
+        test_evaluation = test_trainer.evaluate(metric_key_prefix="test")
+        test_evaluation["pair"] = f"{lang1}_{lang2}"
+        results["test"].append(test_evaluation)
+    logger.info(results)
+    json.dump(results, open(os.path.join(output_dir, f"evaluation_{task}.json"), "w"), indent=2)
 
 
 def load_data(lang1, lang2, task, config):
@@ -161,8 +179,15 @@ def load_data(lang1, lang2, task, config):
 
     def encode_batch(batch):
         """Encodes a batch of input data using the model tokenizer."""
-        sen1 = tokenizer(batch["original"], max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
-        sen2 = tokenizer(batch["translation"], max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
+        original = batch["original"]
+        translation = batch["translation"]
+        if "prompt" in config:
+            prompt_orig, prompt_transl = config["prompt"]
+            original = [f"{prompt_orig}: {o}" for o in original]
+            translation = [f"{prompt_transl}: {t}" for t in translation]
+
+        sen1 = tokenizer(original, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
+        sen2 = tokenizer(translation, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
 
         for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
             i1.append(2)
