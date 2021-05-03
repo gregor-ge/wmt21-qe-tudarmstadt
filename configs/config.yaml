@@ -1,16 +1,17 @@
 wandb_project: wmt21-qe # optional
 do_train: True
 output_dir: results/qe_da/testing
-adapter_path: path/to/trained/adapter
+adapter_path: C:\Users\Gregor\Google Drive\Uni\SS21\Seminar\colab\results\qe-da\hyper\train_enzh_bs32_lr1-4_2500_qe_da_2021-05-02_12-43\best_checkpoint\qe_da
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
 report_to: none
 madx2: False
+split: True
 #prompt: [original, translation]
 train:
   train_batchsize: 16
   eval_batchsize: 32
-  max_steps: 1000
+  max_steps: 10
   logging_steps: 10
   eval_steps: 250
   gradient_accumulation_steps: 1

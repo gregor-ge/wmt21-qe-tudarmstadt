@@ -38,17 +38,30 @@ def train(config):
 
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
-    model.add_adapter(task)
-    model.add_classification_head(task, num_labels=1)
+    if config.get("split", True):
+        model.add_adapter(task+"_original")
+        model.add_adapter(task+"_translation")
+        model.add_classification_head(task+"_original", num_labels=1)
+    else:
+        model.add_adapter(task)
+        model.add_classification_head(task, num_labels=1)
 
     train_config = config["train"]
     train_lang1, train_lang2 = train_config["pair"]
     logger.info(f"Training for {task} {train_lang1}-{train_lang2}")
     model.load_adapter(f"{train_lang1}/wiki@ukp")
     model.load_adapter(f"{train_lang2}/wiki@ukp")
-    model.train_adapter([task])
+    if config.get("split", True):
+        model.train_adapter([task+"_original", task+"_translation"])
+    else:
+        model.train_adapter([task])
     skip_layer = [11] if config.get("madx2", False) else []
-    model.set_active_adapters([ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task], skip_layers=skip_layer)
+    if config.get("split", True):
+        setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)),
+                 ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+    else:
+        setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task]
+    model.set_active_adapters(setup, skip_layers=skip_layer)
 
     dataset = load_data(train_lang1, train_lang2, task, config)
 
@@ -82,9 +95,18 @@ def train(config):
         do_save_full_model=False
     )
     trainer.train()
-    best_checkpoint = os.path.join(output_dir, "best_checkpoint", task)
-    os.makedirs(best_checkpoint, exist_ok=True)
-    model.save_adapter(best_checkpoint, task)
+    if config.get("split", True):
+        best_checkpoint = os.path.join(output_dir, "best_checkpoint")
+        folder1 = os.path.join(best_checkpoint, task+"_original")
+        folder2 = os.path.join(best_checkpoint, task+"_translation")
+        os.makedirs(folder1, exist_ok=True)
+        os.makedirs(folder2, exist_ok=True)
+        model.save_adapter(folder1, task+"_original")
+        model.save_adapter(folder2, task+"_translation")
+    else:
+        best_checkpoint = os.path.join(output_dir, "best_checkpoint", task)
+        os.makedirs(best_checkpoint, exist_ok=True)
+        model.save_adapter(best_checkpoint, task)
     test(config, model, task_folder)
 
 
@@ -95,7 +117,11 @@ def test(config, model=None, task_folder=None):
         logger.info(f"Loading task adapter from {config['adapter_path']}")
         model_config = XLMRobertaConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
         model = XLMRobertaModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
-        model.load_adapter(config["adapter_path"], model_name=task)
+        if config.get("split", True):
+            model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), model_name=task+"_original")
+            model.load_adapter(os.path.join(config["adapter_path"], task+"_translation"), model_name=task+"_translation")
+        else:
+            model.load_adapter(os.path.join(config["adapter_path"], task), model_name=task)
     if not task_folder:
         task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
@@ -112,8 +138,12 @@ def test(config, model=None, task_folder=None):
         model.load_adapter(f"{lang2}/wiki@ukp")
 
         skip_layer = [11] if config.get("madx2", False) else []
-        model.set_active_adapters([ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task], skip_layers=skip_layer)
-
+        if config.get("split", True):
+            setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)),
+                         ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        else:
+            setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task]
+        model.set_active_adapters(setup, skip_layers=skip_layer)
         dev_trainer = Trainer(
             model=model,
             args=TrainingArguments(output_dir=output_dir,
