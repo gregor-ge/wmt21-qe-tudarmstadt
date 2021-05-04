@@ -9,8 +9,8 @@ madx2: False
 split: True
 #prompt: [original, translation]
 train:
-  train_batchsize: 16
-  eval_batchsize: 32
+  train_batchsize: 16 # should evenly divide 7000 for multi pair training to work with the current hack
+  eval_batchsize: 50 # must evenly divide 1000 for multi pair training to work with the current hack
   max_steps: 10
   logging_steps: 10
   eval_steps: 250
@@ -18,7 +18,9 @@ train:
   save_total_limit: 2
   amp: True
   epochs: 1
-  pair: [en, de]
+  pair: [en, zh] # list of pairs or just a pair
+    #- [en, de]
+    #- [en, zh]
 test:
   batchsize: 32
   pairs:
