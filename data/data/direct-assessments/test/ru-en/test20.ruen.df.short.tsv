@@ -1,4 +1,4 @@
-segid	original	translation	scores	mean	z_scores	z_mean	model_scores
+index	original	translation	scores	mean	z_scores	z_mean	model_scores
 9965	Этот молодой мозамбикец учился в России, а члены его ассоциации обвиняются в передаче пророссийских посланий с помощью социальных сетей и других средств", - резюмирует автор публикации.	This young Mozambican studied in Russia, and members of his association are accused of transmitting pro-Russian messages through social media and other means, "summarizes the author of the publication.	[88, 93, 89]	90.0	[0.6815223847683397, 0.8577506227514022, 0.7082749959065777]	0.7491826678087733	-0.27072206139564514
 1434	Ласковое слово лучше мягкого пирога.	An affectionate word is better than a soft pie.	[97, 77, 73]	82.33333333333333	[0.9784837959219265, 0.3852552488930652, 0.13830375704867165]	0.5006809339545545	-0.29915353655815125
 9491	— Ну, спасибо, конечно, на добром слове...	Well, thanks, of course, for the kind words...	[70, 79, 73]	74.0	[-0.22447164316845075, 0.35413781675949085, 0.15110733960763664]	0.09359117106622557	-0.5720914006233215

@@ -1,4 +1,4 @@
-segid	original	translation	scores	mean	z_scores	z_mean	model_scores
+index	original	translation	scores	mean	z_scores	z_mean	model_scores
 1382	Кто бы и знал, коли б не сам сказал.	Who would have known if he hadn't said it himself.	[90, 89, 91]	90.0	[0.7475138094691367, 0.7994502858519296, 0.7858059361811293]	0.7775900105007318	-0.5446469187736511
 1360	Которая рука крест кладёт, та и нож точит.	Whoever puts the cross in his hand sharpens the knife.	[43, 46, 29]	39.333333333333336	[-0.8032846709995944, -0.8329495116500147, -1.2767737522334435]	-0.9710026449610175	-0.5399141907691956
 6341	Иисус им в ответ:	Jesus answered them:	[84, 94, 91]	89.66666666666667	[0.4628153540447282, 1.2452789250952567, 0.7858059361811293]	0.8313000717737048	-0.4528501033782959

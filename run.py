@@ -8,7 +8,8 @@ from typing import Union, List, Optional
 import torch
 import yaml
 from torch.utils.data import DataLoader, Sampler
-from transformers import XLMRobertaModelWithHeads, XLMRobertaConfig, XLMRobertaTokenizer, TrainingArguments, Trainer, EvalPrediction, TrainerCallback
+from transformers import XLMRobertaModelWithHeads, XLMRobertaConfig, XLMRobertaTokenizer, TrainingArguments, Trainer, \
+    EvalPrediction, TrainerCallback, AutoConfig, AutoTokenizer, AutoModelWithHeads, AdapterConfig
 import numpy as np
 from scipy.stats import pearsonr
 import transformers.adapters.composition as ac
@@ -39,8 +40,8 @@ def train(config):
     logger.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "train_config.yaml"), "w"))
 
-    model_config = XLMRobertaConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
-    model = XLMRobertaModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+    model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
+    model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
 
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
@@ -56,15 +57,14 @@ def train(config):
     is_multipair = not isinstance(train_config["pair"][0], str)
     logger.info(f"Training for {task} {train_config['pair']}")
     pairs = train_config["pair"] if is_multipair else [train_config["pair"]]
+    adapter_config = AdapterConfig.load("pfeiffer", non_linearity="gelu", reduction_factor=2)
     for train_lang1, train_lang2 in pairs:
-        model.load_adapter(f"{train_lang1}/wiki@ukp")
-        model.load_adapter(f"{train_lang2}/wiki@ukp")
-
+        model.load_adapter(f"{train_lang1}/wiki@ukp", config=adapter_config, with_head=False)
+        model.load_adapter(f"{train_lang2}/wiki@ukp", config=adapter_config, with_head=False)
     if config.get("split", True):
         model.train_adapter([task+"_original", task+"_translation"])
     else:
         model.train_adapter([task])
-
     dataset = load_data(train_config["pair"], task, config)
 
     training_args = TrainingArguments(
@@ -87,8 +87,6 @@ def train(config):
         report_to=config.get("report_to", "all"),
         skip_memory_metrics=config.get("skip_memory_metrics", True)
     )
-
-
 
     skip_layer = [11] if config.get("madx2", False) else []
     if is_multipair:
@@ -142,8 +140,8 @@ def test(config, model=None, task_folder=None):
     assert task == "qe_da" or task == "qe_hter"
     if not model:
         logger.info(f"Loading task adapter from {config['adapter_path']}")
-        model_config = XLMRobertaConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
-        model = XLMRobertaModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+        model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
+        model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
         if config.get("split", True):
             model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), model_name=task+"_original")
             model.load_adapter(os.path.join(config["adapter_path"], task+"_translation"), model_name=task+"_translation")
@@ -160,8 +158,8 @@ def test(config, model=None, task_folder=None):
         lang1, lang2 = pair
         dataset = load_data(pair, task, config)
         logger.info(f"Evaluation results for {task} {lang1}-{lang2}")
-        model.load_adapter(f"{lang1}/wiki@ukp")
-        model.load_adapter(f"{lang2}/wiki@ukp")
+        model.load_adapter(f"{lang1}/wiki@ukp", with_head=False)
+        model.load_adapter(f"{lang2}/wiki@ukp", with_head=False)
 
         skip_layer = [11] if config.get("madx2", False) else []
         if config.get("split", True):
@@ -205,9 +203,7 @@ def test(config, model=None, task_folder=None):
 def load_data(lang_pairs, task, config):
     if isinstance(lang_pairs[0], str):
         lang_pairs = [lang_pairs]
-    tokenizer = XLMRobertaTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
-    if config.get("model", "xlm-roberta-base") != "xlm-roberta-base":
-        logger.warning("encode_batch not implemented for non-xlmr models!")
+    tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
     if task == "qe_da":
         dataset = load_dataset("csv", delimiter="\t", quoting=3, data_files={
@@ -249,19 +245,31 @@ def load_data(lang_pairs, task, config):
         sen1 = tokenizer(original, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
         sen2 = tokenizer(translation, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
 
-        for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
-            i1.append(2)
-            i1.extend(i2[1:])
+        if "xlm" in config.get("model", "xlm-roberta-base"):
+            for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
+                i1.append(2)
+                i1.extend(i2[1:])
 
-        for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
-            a1.extend(a2)
+            for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
+                a1.extend(a2)
+        else:
+            for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
+                i1.extend(i2[1:])
+
+            for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
+                a1.extend(a2[1:])
+
+            for t1, t2 in zip(sen1["token_type_ids"], sen2["token_type_ids"]):
+                t1.extend([1]*(len(t2)-1))
 
         return sen1
     # Encode the input data
     dataset = dataset.map(encode_batch, batched=True)
     # Transform to pytorch tensors and only output the required columns
-    dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
-
+    if "xlm" in config.get("model", "xlm-roberta-base"):
+        dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
+    else:
+        dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "token_type_ids", "label"])
     return dataset
 
 

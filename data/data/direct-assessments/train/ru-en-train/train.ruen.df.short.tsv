@@ -1,4 +1,4 @@
-segid	original	translation	scores	mean	z_scores	z_mean	model_scores
+index	original	translation	scores	mean	z_scores	z_mean	model_scores
 10005	О необходимости уплачивать проценты по займам как об одной из причин падения доходов говорили и в Минфине.	The need to pay interest on loans as one of the reasons for the fall in revenues was also discussed in the Ministry of Finance.	[86, 91, 82]	86.33333333333333	[0.6155309600675426, 0.7858059361811293, 0.36463149729998834]	0.5886561311828867	-0.4334273636341095
 735	Быть на низ плыть, коли вёсел нет.	To be at the bottom, if you don't have oars.	[50, 39, 62]	50.333333333333336	[-0.5723146845468047, -1.6204085607056529, -0.19370782597805392]	-0.7954770237435037	-0.8084549307823181
 9774	На кадрах ролика видно, как полицейский борется с человеком в белой кофте, в этот момент к ним подходит демонстрант в черном с закрытым лицом.	The footage shows a police officer wrestling with a man in a white jacket, at which point they are approached by a protester in black with his face covered.	[86, 95, 79]	86.66666666666667	[0.560999210789468, 0.9296953093216753, 0.4637277926040995]	0.6514741042384143	-0.4630297124385834
