@@ -1,17 +1,14 @@
 wandb_project: wmt21-qe # optional
 do_train: True
 output_dir: results/qe_da/testing
-adapter_path: C:\Users\Gregor\Google Drive\Uni\SS21\Seminar\colab\results\qe-da\hyper\train_enzh_bs32_lr1-4_2500_qe_da_2021-05-02_12-43\best_checkpoint\qe_da
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
-report_to: None
-madx2: False
-split: True
+report_to: all
 #prompt: [original, translation]
 train:
-  train_batchsize: 32 # should evenly divide 7000 for multi pair training to work with the current hack
-  eval_batchsize: 50 # must evenly divide 1000 for multi pair training to work with the current hack
-  max_steps: 2500
+  train_batchsize: 4 # should evenly divide 7000 for multi pair training to work with the current hack
+  eval_batchsize: 4 # must evenly divide 1000 for multi pair training to work with the current hack
+  max_steps: 1500
   logging_steps: 10
   eval_steps: 250
   gradient_accumulation_steps: 1
@@ -22,7 +19,7 @@ train:
     #- [en, de]
     #- [en, zh]
 test:
-  batchsize: 32
+  batchsize: 4
   pairs:
     - [en, de]
     - [en, zh]
