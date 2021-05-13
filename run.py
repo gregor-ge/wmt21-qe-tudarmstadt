@@ -40,7 +40,7 @@ def train(config):
     logger.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "train_config.yaml"), "w"))
 
-    model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
+    model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
     model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
 
     task = config["task"]

@@ -9,6 +9,7 @@ report_to: none
 madx2: False
 architecture: base
 reduction_factor: 8
+dropout: 0.1
 #prompt: [original, translation]
 train:
   train_batchsize: 16 # should evenly divide 7000 for multi pair training to work with the current hack
@@ -31,5 +32,5 @@ test:
     - [et, en]
 #    - [ne, en] #missing
 #   - [ro, en]
-#   - [ru, en]
+    - [ru, en]
 #   - [si, en]
