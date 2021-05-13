@@ -1,12 +1,14 @@
 wandb_project: wmt21-qe # optional
 do_train: True
+model: bert-base-multilingual-cased
 output_dir: results/qe_da/testing
 adapter_path: C:\Users\Gregor\Google Drive\Uni\SS21\Seminar\colab\results\qe-da\hyper\train_enzh_bs32_lr1-4_2500_qe_da_2021-05-02_12-43\best_checkpoint\qe_da
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
 report_to: none
 madx2: False
-split: True
+architecture: base
+reduction_factor: 8
 #prompt: [original, translation]
 train:
   train_batchsize: 16 # should evenly divide 7000 for multi pair training to work with the current hack

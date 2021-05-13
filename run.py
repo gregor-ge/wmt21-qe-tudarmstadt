@@ -45,24 +45,32 @@ def train(config):
 
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
-    if config.get("split", True):
-        model.add_adapter(task+"_original")
-        model.add_adapter(task+"_translation")
+    adapter_config = AdapterConfig.load("pfeiffer", non_linearity="gelu", reduction_factor=config.get("reduction_factor", 16))
+    if config.get("architecture", "base") == "split":
+        model.add_adapter(task+"_original", config=adapter_config)
+        model.add_adapter(task+"_translation", config=adapter_config)
         model.add_classification_head(task+"_original", num_labels=1)
+    elif config.get("architecture", "base") == "tri":
+        model.add_adapter(task+"_original", config=adapter_config)
+        model.add_adapter(task+"_translation", config=adapter_config)
+        model.add_adapter(task+"_tri", config=adapter_config)
+        model.add_classification_head(task+"_tri", num_labels=1)
     else:
-        model.add_adapter(task)
+        model.add_adapter(task, config=adapter_config)
         model.add_classification_head(task, num_labels=1)
 
     train_config = config["train"]
     is_multipair = not isinstance(train_config["pair"][0], str)
     logger.info(f"Training for {task} {train_config['pair']}")
     pairs = train_config["pair"] if is_multipair else [train_config["pair"]]
-    adapter_config = AdapterConfig.load("pfeiffer", non_linearity="gelu", reduction_factor=2)
+
     for train_lang1, train_lang2 in pairs:
-        model.load_adapter(f"{train_lang1}/wiki@ukp", config=adapter_config, with_head=False)
-        model.load_adapter(f"{train_lang2}/wiki@ukp", config=adapter_config, with_head=False)
-    if config.get("split", True):
+        model.load_adapter(f"{train_lang1}/wiki@ukp", with_head=False)
+        model.load_adapter(f"{train_lang2}/wiki@ukp", with_head=False)
+    if config.get("architecture", "base") == "split":
         model.train_adapter([task+"_original", task+"_translation"])
+    elif config.get("architecture", "base") == "tri":
+        model.train_adapter([task+"_original", task+"_translation", task+"_tri"])
     else:
         model.train_adapter([task])
     dataset = load_data(train_config["pair"], task, config)
@@ -90,8 +98,13 @@ def train(config):
 
     skip_layer = [11] if config.get("madx2", False) else []
     if is_multipair:
-        task_adapter = ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))\
-            if config.get("split", True) else task
+        if config.get("architecture", "base") == "split":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        elif config.get("architecture", "base") == "tri":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50)),
+                            task+"_tri"]
+        else:
+            task_adapter = [task]
         trainer = CustomTrainer(
             model=model,
             args=training_args,
@@ -104,11 +117,14 @@ def train(config):
         trainer.add_callback(AdapterLangCallback(pairs, task_adapter, config.get("max_seq_len", 50), skip_layer))
     else:
         train_lang1, train_lang2 = pairs[0]
-        if config.get("split", True):
-            setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)),
-                     ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        if config.get("architecture", "base") == "split":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        elif config.get("architecture", "base") == "tri":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50)),
+                            task+"_tri"]
         else:
-            setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), task]
+            task_adapter = [task]
+        setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
         model.set_active_adapters(setup, skip_layers=skip_layer)
         trainer = Trainer(
             model=model,
@@ -120,7 +136,7 @@ def train(config):
             do_save_full_model=False
         )
     trainer.train()
-    if config.get("split", True):
+    if config.get("architecture", "base") == "split" or config.get("architecture", "base") == "tri":
         best_checkpoint = os.path.join(output_dir, "best_checkpoint")
         folder1 = os.path.join(best_checkpoint, task+"_original")
         folder2 = os.path.join(best_checkpoint, task+"_translation")
@@ -128,6 +144,10 @@ def train(config):
         os.makedirs(folder2, exist_ok=True)
         model.save_adapter(folder1, task+"_original")
         model.save_adapter(folder2, task+"_translation")
+        if config.get("architecture", "base") == "tri":
+            folder3 = os.path.join(best_checkpoint, task+"_tri")
+            os.makedirs(folder3, exist_ok=True)
+            model.save_adapter(folder3, task+"_tri")
     else:
         best_checkpoint = os.path.join(output_dir, "best_checkpoint", task)
         os.makedirs(best_checkpoint, exist_ok=True)
@@ -142,9 +162,11 @@ def test(config, model=None, task_folder=None):
         logger.info(f"Loading task adapter from {config['adapter_path']}")
         model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
         model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
-        if config.get("split", True):
+        if config.get("architecture", "base") == "split" or config.get("architecture", "base") == "tri":
             model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), model_name=task+"_original")
             model.load_adapter(os.path.join(config["adapter_path"], task+"_translation"), model_name=task+"_translation")
+            if config.get("architecture", "base") == "tri":
+                model.load_adapter(os.path.join(config["adapter_path"], task+"_tri"), model_name=task+"_tri")
         else:
             model.load_adapter(os.path.join(config["adapter_path"], task), model_name=task)
     if not task_folder:
@@ -162,11 +184,14 @@ def test(config, model=None, task_folder=None):
         model.load_adapter(f"{lang2}/wiki@ukp", with_head=False)
 
         skip_layer = [11] if config.get("madx2", False) else []
-        if config.get("split", True):
-            setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)),
-                         ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        if config.get("architecture", "base") == "split":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        elif config.get("architecture", "base") == "tri":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50)),
+                            task+"_tri"]
         else:
-            setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), task]
+            task_adapter = [task]
+        setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
         model.set_active_adapters(setup, skip_layers=skip_layer)
         dev_trainer = Trainer(
             model=model,
@@ -431,14 +456,14 @@ class AdapterLangCallback(TrainerCallback):
         """
         model = kwargs["model"]
         train_lang1, train_lang2 = self.pairs[self.train_idx]
-        setup = [ac.Split(train_lang1, train_lang2, split_index=self.split_index), self.task_adapters]
+        setup = [ac.Split(train_lang1, train_lang2, split_index=self.split_index), *self.task_adapters]
         model.set_active_adapters(setup, skip_layers=self.skip_layers)
         self.train_idx += 1
         self.train_idx = self.train_idx % len(self.pairs)
 
     def next_test_adapter(self, model):
         test_lang1, test_lang2 = self.pairs[self.test_idx]
-        setup = [ac.Split(test_lang1, test_lang2, split_index=self.split_index), self.task_adapters]
+        setup = [ac.Split(test_lang1, test_lang2, split_index=self.split_index), *self.task_adapters]
         model.set_active_adapters(setup, skip_layers=self.skip_layers)
         self.test_idx += 1
         self.test_idx = self.test_idx % len(self.pairs)
