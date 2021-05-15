@@ -7,15 +7,16 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, Sampler
 from transformers import XLMRobertaModelWithHeads, XLMRobertaConfig, XLMRobertaTokenizer, TrainingArguments, Trainer, \
-    EvalPrediction, TrainerCallback, AutoConfig, AutoTokenizer, AutoModelWithHeads, AdapterConfig, AutoModelForSequenceClassification
+    EvalPrediction, TrainerCallback, AutoConfig, AutoTokenizer, AutoModelWithHeads, AutoModelForSequenceClassification
 import numpy as np
 from scipy.stats import pearsonr
 from datasets import load_dataset, Dataset, DatasetDict
 import logging
 
 
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logging.basicConfig(format='%(asctime)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                    level=logging.INFO)
 
 def main(config):
     os.environ["WANDB_WATCH"] = "false"
@@ -27,11 +28,11 @@ def main(config):
         test(config)
 
 def train(config):
-    logger.info(config)
+    logging.info(config)
     task_folder = f"train_{config.get('task_name', '')}{config['task']}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
     os.makedirs(output_dir, exist_ok=True)
-    logger.info(f"Saving results in {output_dir}")
+    logging.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "train_config.yaml"), "w"))
 
     model_config = AutoConfig.from_pretrained(config.get("model", "bert-base-multilingual-cased"), num_labels=1)
@@ -41,7 +42,7 @@ def train(config):
 
     train_config = config["train"]
     is_multipair = not isinstance(train_config["pair"][0], str)
-    logger.info(f"Training for {task} {train_config['pair']}")
+    logging.info(f"Training for {task} {train_config['pair']}")
     pairs = train_config["pair"] if is_multipair else [train_config["pair"]]
 
     dataset = load_data(train_config["pair"], task, config)
@@ -75,7 +76,7 @@ def train(config):
             eval_dataset=dataset["dev"],
             compute_metrics=compute_pearson,
             do_save_adapters=True,
-            do_save_full_model=False
+            do_save_full_model=True
         )
     else:
         train_lang1, train_lang2 = pairs[0]
@@ -86,7 +87,7 @@ def train(config):
             eval_dataset=dataset["dev"],
             compute_metrics=compute_pearson,
             do_save_adapters=True,
-            do_save_full_model=False
+            do_save_full_model=True
         )
     trainer.train()
     best_checkpoint = os.path.join(output_dir, "best_checkpoint", task)
@@ -96,7 +97,7 @@ def train(config):
 def test(config, model=None, task_folder=None):
     task = config["task"]
     if not model:
-        logger.info(f"Loading task adapter from {config['adapter_path']}")
+        logging.info(f"Loading task adapter from {config['adapter_path']}")
         model_config = AutoConfig.from_pretrained(config.get("model", "bert-base-multilingual-cased"), num_labels=1)
         model = AutoModelForSequenceClassification.from_pretrained(config.get('model', "bert-base-multilingual-cased"),
                                                                    config=model_config)
@@ -104,13 +105,13 @@ def test(config, model=None, task_folder=None):
         task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
     os.makedirs(output_dir, exist_ok=True)
-    logger.info(f"Saving results in {output_dir}")
+    logging.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
     results = {"dev": [], "test": [], "task": task}
     for pair in config["test"]["pairs"]:
         lang1, lang2 = pair
         dataset = load_data(pair, task, config)
-        logger.info(f"Evaluation results for {task} {lang1}-{lang2}")
+        logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
 
         dev_trainer = Trainer(
             model=model,
@@ -140,7 +141,7 @@ def test(config, model=None, task_folder=None):
         test_evaluation = test_trainer.evaluate(metric_key_prefix="test")
         test_evaluation["pair"] = f"{lang1}_{lang2}"
         results["test"].append(test_evaluation)
-    logger.info(results)
+    logging.info(results)
     json.dump(results, open(os.path.join(output_dir, f"evaluation_{task}.json"), "w"), indent=2)
 
 def load_data(lang_pairs, task, config):

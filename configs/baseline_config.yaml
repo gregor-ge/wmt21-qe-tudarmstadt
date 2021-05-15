@@ -8,16 +8,17 @@ report_to: all
 train:
   train_batchsize: 4 # should evenly divide 7000 for multi pair training to work with the current hack
   eval_batchsize: 4 # must evenly divide 1000 for multi pair training to work with the current hack
-  max_steps: 1500
+  max_steps: 2500
   logging_steps: 10
   eval_steps: 250
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 4
   save_total_limit: 2
   amp: True
   epochs: 1
-  pair: [en, de] # list of pairs or just a pair
-    #- [en, de]
-    #- [en, zh]
+  pair: # [en, zh] # list of pairs or just a pair
+    - [ en, de ]
+    - [ en, zh ]
+    - [ et, en ]
 test:
   batchsize: 4
   pairs:
