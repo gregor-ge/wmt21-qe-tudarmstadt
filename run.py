@@ -19,8 +19,9 @@ import logging
 from transformers.trainer_pt_utils import nested_concat, DistributedTensorGatherer, SequentialDistributedSampler
 from transformers.trainer_utils import PredictionOutput, denumpify_detensorize
 
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)
+logging.basicConfig(format='%(asctime)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S',
+                    level=logging.INFO)
 
 def main(config):
     os.environ["WANDB_WATCH"] = "false"
@@ -33,11 +34,11 @@ def main(config):
 
 
 def train(config):
-    logger.info(config)
+    logging.info(config)
     task_folder = f"train_{config.get('task_name', '')}{config['task']}_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
     os.makedirs(output_dir, exist_ok=True)
-    logger.info(f"Saving results in {output_dir}")
+    logging.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "train_config.yaml"), "w"))
 
     model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
@@ -61,7 +62,7 @@ def train(config):
 
     train_config = config["train"]
     is_multipair = not isinstance(train_config["pair"][0], str)
-    logger.info(f"Training for {task} {train_config['pair']}")
+    logging.info(f"Training for {task} {train_config['pair']}")
     pairs = train_config["pair"] if is_multipair else [train_config["pair"]]
 
     for train_lang1, train_lang2 in pairs:
@@ -159,8 +160,8 @@ def test(config, model=None, task_folder=None):
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
     if not model:
-        logger.info(f"Loading task adapter from {config['adapter_path']}")
-        model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1)
+        logging.info(f"Loading task adapter from {config['adapter_path']}")
+        model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
         model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
         if config.get("architecture", "base") == "split" or config.get("architecture", "base") == "tri":
             model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), model_name=task+"_original")
@@ -173,13 +174,13 @@ def test(config, model=None, task_folder=None):
         task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
     os.makedirs(output_dir, exist_ok=True)
-    logger.info(f"Saving results in {output_dir}")
+    logging.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
     results = {"dev": [], "test": [], "task": task}
     for pair in config["test"]["pairs"]:
         lang1, lang2 = pair
         dataset = load_data(pair, task, config)
-        logger.info(f"Evaluation results for {task} {lang1}-{lang2}")
+        logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
         model.load_adapter(f"{lang1}/wiki@ukp", with_head=False)
         model.load_adapter(f"{lang2}/wiki@ukp", with_head=False)
 
@@ -221,7 +222,7 @@ def test(config, model=None, task_folder=None):
         test_evaluation = test_trainer.evaluate(metric_key_prefix="test")
         test_evaluation["pair"] = f"{lang1}_{lang2}"
         results["test"].append(test_evaluation)
-    logger.info(results)
+    logging.info(results)
     json.dump(results, open(os.path.join(output_dir, f"evaluation_{task}.json"), "w"), indent=2)
 
 
@@ -346,7 +347,7 @@ class CustomTrainer(Trainer):
         if self.args.deepspeed and not self.args.do_train:
             # no harm, but flagging to the user that deepspeed config is ignored for eval
             # flagging only for when --do_train wasn't passed as only then it's redundant
-            logger.info("Detected the deepspeed argument but it will not be used for evaluation")
+            logging.info("Detected the deepspeed argument but it will not be used for evaluation")
 
         model = self._wrap_model(self.model, training=False)
 
@@ -357,9 +358,9 @@ class CustomTrainer(Trainer):
 
         batch_size = dataloader.batch_size
         num_examples = self.num_examples(dataloader)
-        logger.info(f"***** Running {description} *****")
-        logger.info(f"  Num examples = {num_examples}")
-        logger.info(f"  Batch size = {batch_size}")
+        logging.info(f"***** Running {description} *****")
+        logging.info(f"  Num examples = {num_examples}")
+        logging.info(f"  Batch size = {batch_size}")
         losses_host: torch.Tensor = None
         preds_host: Union[torch.Tensor, List[torch.Tensor]] = None
         labels_host: Union[torch.Tensor, List[torch.Tensor]] = None
