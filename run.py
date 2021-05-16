@@ -115,7 +115,7 @@ def train(config):
             do_save_adapters=True,
             do_save_full_model=False
         )
-        trainer.add_callback(AdapterLangCallback(pairs, task_adapter, config.get("max_seq_len", 50), skip_layer))
+        trainer.add_callback(AdapterLangCallback(pairs, task_adapter, config.get("max_seq_len", 50), skip_layer, config.get("no_lang", False)))
     else:
         train_lang1, train_lang2 = pairs[0]
         if config.get("architecture", "base") == "split":
@@ -448,11 +448,12 @@ class CustomTrainer(Trainer):
 
 
 class AdapterLangCallback(TrainerCallback):
-    def __init__(self, pairs, task_adapters, split_index, skip_layers):
+    def __init__(self, pairs, task_adapters, split_index, skip_layers, no_lang):
         self.pairs = pairs
         self.task_adapters = task_adapters
         self.split_index = split_index
         self.skip_layers = skip_layers
+        self.no_lang = no_lang
         self.train_idx = 0
         self.test_idx = 0
 
@@ -463,7 +464,7 @@ class AdapterLangCallback(TrainerCallback):
         """
         model = kwargs["model"]
         train_lang1, train_lang2 = self.pairs[self.train_idx]
-        if config.get("no_lang", False):
+        if self.no_lang:
             setup = [*self.task_adapters]
         else:
             setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), *self.task_adapters]
@@ -473,7 +474,7 @@ class AdapterLangCallback(TrainerCallback):
 
     def next_test_adapter(self, model):
         test_lang1, test_lang2 = self.pairs[self.test_idx]
-        if config.get("no_lang", False):
+        if self.no_lang:
             setup = [*self.task_adapters]
         else:
             setup = [ac.Split(test_lang1, test_lang2, split_index=config.get("max_seq_len", 50)), *self.task_adapters]
