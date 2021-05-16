@@ -125,7 +125,10 @@ def train(config):
                             task+"_tri"]
         else:
             task_adapter = [task]
-        setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
+        if config.get("no_lang", False):
+            setup = [*task_adapter]
+        else:
+            setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
         model.set_active_adapters(setup, skip_layers=skip_layer)
         trainer = Trainer(
             model=model,
@@ -192,7 +195,10 @@ def test(config, model=None, task_folder=None):
                             task+"_tri"]
         else:
             task_adapter = [task]
-        setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
+        if config.get("no_lang", False):
+            setup = [*task_adapter]
+        else:
+            setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
         model.set_active_adapters(setup, skip_layers=skip_layer)
         dev_trainer = Trainer(
             model=model,
@@ -457,14 +463,20 @@ class AdapterLangCallback(TrainerCallback):
         """
         model = kwargs["model"]
         train_lang1, train_lang2 = self.pairs[self.train_idx]
-        setup = [ac.Split(train_lang1, train_lang2, split_index=self.split_index), *self.task_adapters]
+        if config.get("no_lang", False):
+            setup = [*self.task_adapters]
+        else:
+            setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), *self.task_adapters]
         model.set_active_adapters(setup, skip_layers=self.skip_layers)
         self.train_idx += 1
         self.train_idx = self.train_idx % len(self.pairs)
 
     def next_test_adapter(self, model):
         test_lang1, test_lang2 = self.pairs[self.test_idx]
-        setup = [ac.Split(test_lang1, test_lang2, split_index=self.split_index), *self.task_adapters]
+        if config.get("no_lang", False):
+            setup = [*self.task_adapters]
+        else:
+            setup = [ac.Split(test_lang1, test_lang2, split_index=config.get("max_seq_len", 50)), *self.task_adapters]
         model.set_active_adapters(setup, skip_layers=self.skip_layers)
         self.test_idx += 1
         self.test_idx = self.test_idx % len(self.pairs)
