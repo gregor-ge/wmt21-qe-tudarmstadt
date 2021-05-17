@@ -6,22 +6,25 @@ from datetime import datetime
 from typing import Union, List, Optional
 
 import torch
+from torch.nn import Embedding
 import yaml
 from torch.utils.data import DataLoader, Sampler
-from transformers import XLMRobertaModelWithHeads, XLMRobertaConfig, XLMRobertaTokenizer, TrainingArguments, Trainer, \
+from transformers import TrainingArguments, Trainer, \
     EvalPrediction, TrainerCallback, AutoConfig, AutoTokenizer, AutoModelWithHeads, AdapterConfig
 import numpy as np
 from scipy.stats import pearsonr
 import transformers.adapters.composition as ac
 from datasets import load_dataset, Dataset, DatasetDict
 import logging
-
+from transformers.adapter_utils import resolve_adapter_path
 from transformers.trainer_pt_utils import nested_concat, DistributedTensorGatherer, SequentialDistributedSampler
 from transformers.trainer_utils import PredictionOutput, denumpify_detensorize
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
                     level=logging.INFO)
+
+LANG_TO_OFFSET = {"si": 0, "km": 1}
 
 def main(config):
     os.environ["WANDB_WATCH"] = "false"
@@ -66,8 +69,8 @@ def train(config):
     pairs = train_config["pair"] if is_multipair else [train_config["pair"]]
 
     for train_lang1, train_lang2 in pairs:
-        model.load_adapter(f"{train_lang1}/wiki@ukp", with_head=False)
-        model.load_adapter(f"{train_lang2}/wiki@ukp", with_head=False)
+        load_lang_adapter(model, train_lang1, config)
+        load_lang_adapter(model, train_lang2, config)
     if config.get("architecture", "base") == "split":
         model.train_adapter([task+"_original", task+"_translation"])
     elif config.get("architecture", "base") == "tri":
@@ -182,10 +185,10 @@ def test(config, model=None, task_folder=None):
     results = {"dev": [], "test": [], "task": task}
     for pair in config["test"]["pairs"]:
         lang1, lang2 = pair
-        dataset = load_data(pair, task, config)
         logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
-        model.load_adapter(f"{lang1}/wiki@ukp", with_head=False)
-        model.load_adapter(f"{lang2}/wiki@ukp", with_head=False)
+        load_lang_adapter(model, lang1, config)
+        load_lang_adapter(model, lang2, config)
+        dataset = load_data(pair, task, config)
 
         skip_layer = [11] if config.get("madx2", False) else []
         if config.get("architecture", "base") == "split":
@@ -232,6 +235,27 @@ def test(config, model=None, task_folder=None):
     json.dump(results, open(os.path.join(output_dir, f"evaluation_{task}.json"), "w"), indent=2)
 
 
+def load_lang_adapter(model, language, config):
+    if not config.get("no_lang", False):
+        download_langs = set(["ro", "si", "km", "ps", "ne"])
+        if language in download_langs:
+            model.load_adapter(
+                f"https://public.ukp.informatik.tu-darmstadt.de/AdapterHub/text_lang/{language}/bert-base-multilingual-cased/pfeiffer/{language}.zip",
+                with_head=False)
+        else:
+            model.load_adapter(f"{language}/wiki@ukp", with_head=False)
+    if language in ["si", "km"] and config.get("extend_embeddings", False):
+        if "token_offset" not in config:
+            config["token_offset"] = [-1, -1]
+        path = resolve_adapter_path(f"https://public.ukp.informatik.tu-darmstadt.de/AdapterHub/text_lang/{language}/bert-base-multilingual-cased/pfeiffer/{language}.zip")
+        added_embeddings = torch.load(os.path.join(path, "pytorch_model_embeddings.bin"))["bert.embeddings.word_embeddings.weight"].to(model.device)
+        current_emb_len = model.bert.embeddings.word_embeddings.num_embeddings
+        config["token_offset"][LANG_TO_OFFSET[language]] = current_emb_len
+        new_embedding = Embedding(current_emb_len+added_embeddings.shape[0], added_embeddings.shape[1], padding_idx=0)
+        new_embedding.weight.data = torch.cat([model.bert.embeddings.word_embeddings.weight.data, added_embeddings])
+        model.bert.embeddings.word_embeddings = new_embedding
+
+
 def load_data(lang_pairs, task, config):
     if isinstance(lang_pairs[0], str):
         lang_pairs = [lang_pairs]
@@ -265,38 +289,51 @@ def load_data(lang_pairs, task, config):
         test = Dataset.from_dict({"original": test_src, "translation": test_mt, "label": test_hter}, split="test")
         dataset = DatasetDict({"train": train, "dev": dev, "test": test})
 
-    def encode_batch(batch):
-        """Encodes a batch of input data using the model tokenizer."""
-        original = batch["original"]
-        translation = batch["translation"]
-        if "prompt" in config:
-            prompt_orig, prompt_transl = config["prompt"]
-            original = [f"{prompt_orig}: {o}" for o in original]
-            translation = [f"{prompt_transl}: {t}" for t in translation]
+    def encode(is_train, lang_pairs):
+        def _encode(all_data):
+            """Encodes a batch of input data using the model tokenizer."""
+            original = all_data["original"]
+            translation = all_data["translation"]
+            if "prompt" in config:
+                prompt_orig, prompt_transl = config["prompt"]
+                original = [f"{prompt_orig}: {o}" for o in original]
+                translation = [f"{prompt_transl}: {t}" for t in translation]
 
-        sen1 = tokenizer(original, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
-        sen2 = tokenizer(translation, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
+            sen1 = tokenizer(original, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
+            if config.get("extend_embeddings", False):
+                factor = 7000 if is_train else 1000
+                for i, (lang1, lang2) in enumerate(lang_pairs):
+                    if lang1 in ["si", "km"]:
+                        alt_tokenizer = AutoTokenizer.from_pretrained(f"data/{lang1}-tokenizer")
+                        sen1_alt = alt_tokenizer(original[i*factor:i*factor+factor], max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
+                        offset = config["token_offset"][LANG_TO_OFFSET[lang1]]
+                        sen1["input_ids"][i*factor:i*factor+factor] = [[i+offset for i in sen] for sen in sen1_alt["input_ids"]]
 
-        if "xlm" in config.get("model", "xlm-roberta-base"):
-            for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
-                i1.append(2)
-                i1.extend(i2[1:])
+            sen2 = tokenizer(translation, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
 
-            for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
-                a1.extend(a2)
-        else:
-            for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
-                i1.extend(i2[1:])
+            if "xlm" in config.get("model", "xlm-roberta-base"):
+                for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
+                    i1.append(2)
+                    i1.extend(i2[1:])
 
-            for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
-                a1.extend(a2[1:])
+                for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
+                    a1.extend(a2)
+            else:
+                for i1, i2 in zip(sen1["input_ids"], sen2["input_ids"]):
+                    i1.extend(i2[1:])
 
-            for t1, t2 in zip(sen1["token_type_ids"], sen2["token_type_ids"]):
-                t1.extend([1]*(len(t2)-1))
+                for a1, a2 in zip(sen1["attention_mask"], sen2["attention_mask"]):
+                    a1.extend(a2[1:])
 
-        return sen1
+                for t1, t2 in zip(sen1["token_type_ids"], sen2["token_type_ids"]):
+                    t1.extend([1]*(len(t2)-1))
+
+            return sen1
+        return _encode
     # Encode the input data
-    dataset = dataset.map(encode_batch, batched=True)
+    dataset["train"] = dataset["train"].map(encode(True, lang_pairs), batched=True, batch_size=7000*len(lang_pairs))
+    dataset["test"] = dataset["test"].map(encode(False, lang_pairs), batched=True, batch_size=1000*len(lang_pairs))
+    dataset["dev"] = dataset["dev"].map(encode(False, lang_pairs), batched=True, batch_size=1000*len(lang_pairs))
     # Transform to pytorch tensors and only output the required columns
     if "xlm" in config.get("model", "xlm-roberta-base"):
         dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
