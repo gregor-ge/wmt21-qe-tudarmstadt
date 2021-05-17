@@ -10,13 +10,15 @@ from torch.nn import Embedding
 import yaml
 from torch.utils.data import DataLoader, Sampler
 from transformers import TrainingArguments, Trainer, \
-    EvalPrediction, TrainerCallback, AutoConfig, AutoTokenizer, AutoModelWithHeads, AdapterConfig
+    EvalPrediction, TrainerCallback, AutoConfig, AutoTokenizer, AutoModelWithHeads
 import numpy as np
 from scipy.stats import pearsonr
 import transformers.adapters.composition as ac
 from datasets import load_dataset, Dataset, DatasetDict
 import logging
-from transformers.adapter_utils import resolve_adapter_path
+
+from transformers.adapters.configuration import AdapterConfig
+from transformers.adapters.utils import resolve_adapter_path
 from transformers.trainer_pt_utils import nested_concat, DistributedTensorGatherer, SequentialDistributedSampler
 from transformers.trainer_utils import PredictionOutput, denumpify_detensorize
 
