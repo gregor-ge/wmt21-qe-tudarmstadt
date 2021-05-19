@@ -102,7 +102,7 @@ def train(config):
         skip_memory_metrics=config.get("skip_memory_metrics", True)
     )
 
-    skip_layer = [11] if config.get("madx2", False) else []
+    skip_layer = []  # [11] if config.get("madx2", False) else []
     if is_multipair:
         if config.get("architecture", "base") == "split":
             task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
@@ -192,7 +192,7 @@ def test(config, model=None, task_folder=None):
         load_lang_adapter(model, lang2, config)
         dataset = load_data(pair, task, config)
 
-        skip_layer = [11] if config.get("madx2", False) else []
+        skip_layer = [] # [11] if config.get("madx2", False) else []
         if config.get("architecture", "base") == "split":
             task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
         elif config.get("architecture", "base") == "tri":
@@ -246,6 +246,12 @@ def load_lang_adapter(model, language, config):
                 with_head=False)
         else:
             model.load_adapter(f"{language}/wiki@ukp", with_head=False)
+        if config.get("madx2", False):
+            try:
+                del model.base_model.encoder.layer._modules['11'].output.adapters[language]
+                del model.base_model.encoder.layer._modules['11'].attention.output.adapters[language]
+            except KeyError:
+                pass
     if language in ["si", "km"] and config.get("extend_embeddings", False):
         if "token_offset" not in config:
             config["token_offset"] = [-1, -1]
