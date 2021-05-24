@@ -16,7 +16,7 @@ from scipy.stats import pearsonr
 import transformers.adapters.composition as ac
 from datasets import load_dataset, Dataset, DatasetDict
 import logging
-
+import random
 from transformers.adapters.configuration import AdapterConfig
 from transformers.adapters.utils import resolve_adapter_path
 from transformers.trainer_pt_utils import nested_concat, DistributedTensorGatherer, SequentialDistributedSampler
@@ -29,6 +29,10 @@ logging.basicConfig(format='%(asctime)s - %(message)s',
 LANG_TO_OFFSET = {"si": 0, "km": 1}
 
 def main(config):
+    torch.manual_seed(config.get("seed", 400002021))
+    np.random.seed(config.get("seed", 400002021))
+    random.seed(config.get("seed", 400002021))
+
     os.environ["WANDB_WATCH"] = "false"
     if config.get("wandb_project", ""):
         os.environ["WANDB_PROJECT"] = config["wandb_project"]
@@ -168,16 +172,18 @@ def test(config, model=None, task_folder=None):
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
     if not model:
+        if isinstance(config['adapter_path'], list):
+            return test_ensemble(config)
         logging.info(f"Loading task adapter from {config['adapter_path']}")
         model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
         model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
         if config.get("architecture", "base") == "split" or config.get("architecture", "base") == "tri":
-            model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), model_name=task+"_original")
-            model.load_adapter(os.path.join(config["adapter_path"], task+"_translation"), model_name=task+"_translation")
+            model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), load_as=task+"_original")
+            model.load_adapter(os.path.join(config["adapter_path"], task+"_translation"), load_as=task+"_translation")
             if config.get("architecture", "base") == "tri":
-                model.load_adapter(os.path.join(config["adapter_path"], task+"_tri"), model_name=task+"_tri")
+                model.load_adapter(os.path.join(config["adapter_path"], task+"_tri"), load_as=task+"_tri")
         else:
-            model.load_adapter(os.path.join(config["adapter_path"], task), model_name=task)
+            model.load_adapter(os.path.join(config["adapter_path"], task), load_as=task)
     if not task_folder:
         task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
     output_dir = os.path.join(config["output_dir"], task_folder)
@@ -361,6 +367,90 @@ def compute_pearson(p: EvalPrediction):
         return {"pearson": np.mean(all_r)}
 
 
+def test_ensemble(config):
+    task = config["task"]
+    assert task == "qe_da" or task == "qe_hter"
+    logging.info(f"Loading task adapter from {config['adapter_path']}")
+    model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
+    model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+    all_task_adapters = []
+    architectures = config.get("architecture", "base")
+    for i, adapter_path in enumerate(config['adapter_path']):
+        if isinstance(architectures, list):
+            architecture = architectures[i]
+        else:
+            architecture = architectures
+        if architecture == "split" or architecture == "tri":
+            model.load_adapter(os.path.join(adapter_path, task+"_original"), load_as=task+"_original"+str(i))
+            model.load_adapter(os.path.join(adapter_path, task+"_translation"), load_as=task+"_translation"+str(i))
+            if architecture == "tri":
+                model.load_adapter(os.path.join(adapter_path, task+"_tri"), load_as=task+"_tri"+str(i))
+        else:
+            model.load_adapter(os.path.join(config["adapter_path"], task), load_as=task+str(i))
+
+        if architecture == "split":
+            task_adapter = ac.Split(task+"_original"+str(i), task+"_translation"+str(i), split_index=config.get("max_seq_len", 50))
+        elif architecture == "tri":
+            task_adapter = [ac.Split(task+"_original"+str(i), task+"_translation"+str(i), split_index=config.get("max_seq_len", 50)),
+                            task+"_tri"+str(i)]
+        else:
+            task_adapter = task+str(i)
+        all_task_adapters.append(task_adapter)
+
+    task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+    output_dir = os.path.join(config["output_dir"], task_folder)
+    os.makedirs(output_dir, exist_ok=True)
+    logging.info(f"Saving results in {output_dir}")
+    yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
+    results = {"dev": [], "test": [], "task": task}
+    for pair in config["test"]["pairs"]:
+        lang1, lang2 = pair
+        logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
+        load_lang_adapter(model, lang1, config)
+        load_lang_adapter(model, lang2, config)
+        dataset = load_data(pair, task, config)
+
+        skip_layer = [] # [11] if config.get("madx2", False) else []
+        if config.get("no_lang", False):
+            setup = all_task_adapters
+        else:
+            setup = [[ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), a] for a in all_task_adapters]
+        #model.set_active_adapters(setup, skip_layers=skip_layer)
+        dev_trainer = EnsembleTrainer(
+            model=model,
+            args=TrainingArguments(output_dir=output_dir,
+                                   remove_unused_columns=False,
+                                   per_device_eval_batch_size=config["test"]["batchsize"],
+                                   run_name=task_folder,
+                                   report_to=config.get("report_to", "all"),
+                                   skip_memory_metrics=config.get("skip_memory_metrics", True)),
+            eval_dataset=dataset["dev"],
+            compute_metrics=compute_pearson,
+            adapter_setup=setup
+        )
+        dev_evaluation = dev_trainer.evaluate(metric_key_prefix="dev")
+        dev_evaluation["pair"] = f"{lang1}_{lang2}"
+        results["dev"].append(dev_evaluation)
+        test_trainer = EnsembleTrainer(
+            model=model,
+            args=TrainingArguments(output_dir=output_dir,
+                                   remove_unused_columns=False,
+                                   per_device_eval_batch_size=config["test"]["batchsize"],
+                                   run_name=task_folder,
+                                   report_to=config.get("report_to", "all"),
+                                   skip_memory_metrics=config.get("skip_memory_metrics", True)),
+            eval_dataset=dataset["test"],
+            compute_metrics=compute_pearson,
+            adapter_setup=setup
+        )
+        test_evaluation = test_trainer.evaluate(metric_key_prefix="test")
+        test_evaluation["pair"] = f"{lang1}_{lang2}"
+        results["test"].append(test_evaluation)
+    logging.info(results)
+    json.dump(results, open(os.path.join(output_dir, f"evaluation_{task}.json"), "w"), indent=2)
+
+
+
 class CustomTrainer(Trainer):
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -490,6 +580,127 @@ class CustomTrainer(Trainer):
                 metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
 
         return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
+
+
+class EnsembleTrainer(Trainer):
+    def __init__(self, adapter_setup=[], **kwargs):
+        super(EnsembleTrainer, self).__init__(**kwargs)
+        self.adapter_setup = adapter_setup
+
+    def prediction_loop(
+            self,
+            dataloader: DataLoader,
+            description: str,
+            prediction_loss_only: Optional[bool] = None,
+            ignore_keys: Optional[List[str]] = None,
+            metric_key_prefix: str = "eval"
+    ) -> PredictionOutput:
+        """
+        Prediction/evaluation loop, shared by :obj:`Trainer.evaluate()` and :obj:`Trainer.predict()`.
+
+        Works both with or without labels.
+        """
+        if not isinstance(dataloader.dataset, collections.abc.Sized):
+            raise ValueError("dataset must implement __len__")
+        prediction_loss_only = (
+            prediction_loss_only if prediction_loss_only is not None else self.args.prediction_loss_only
+        )
+
+        if self.args.deepspeed and not self.args.do_train:
+            # no harm, but flagging to the user that deepspeed config is ignored for eval
+            # flagging only for when --do_train wasn't passed as only then it's redundant
+            logging.info("Detected the deepspeed argument but it will not be used for evaluation")
+
+        model = self._wrap_model(self.model, training=False)
+
+        # if full fp16 is wanted on eval and this ``evaluation`` or ``predict`` isn't called while
+        # ``train`` is running, half it first and then put on device
+        if not self.is_in_train and self.args.fp16_full_eval:
+            model = model.half().to(self.args.device)
+
+        batch_size = dataloader.batch_size
+        num_examples = self.num_examples(dataloader)
+        logging.info(f"***** Running {description} *****")
+        logging.info(f"  Num examples = {num_examples}")
+        logging.info(f"  Batch size = {batch_size}")
+        losses_host: torch.Tensor = None
+        preds_host: Union[torch.Tensor, List[torch.Tensor]] = None
+        labels_host: Union[torch.Tensor, List[torch.Tensor]] = None
+
+        world_size = max(1, self.args.world_size)
+
+        eval_losses_gatherer = DistributedTensorGatherer(world_size, num_examples, make_multiple_of=batch_size)
+        if not prediction_loss_only:
+            # The actual number of eval_sample can be greater than num_examples in distributed settings (when we pass
+            # a batch size to the sampler)
+            make_multiple_of = None
+            if hasattr(dataloader, "sampler") and isinstance(dataloader.sampler, SequentialDistributedSampler):
+                make_multiple_of = dataloader.sampler.batch_size
+            preds_gatherer = DistributedTensorGatherer(world_size, num_examples, make_multiple_of=make_multiple_of)
+            labels_gatherer = DistributedTensorGatherer(world_size, num_examples, make_multiple_of=make_multiple_of)
+
+        model.eval()
+
+        if self.args.past_index >= 0:
+            self._past = None
+
+        self.callback_handler.eval_dataloader = dataloader
+
+        for setup in self.adapter_setup:
+            model.set_active_adapters(setup)
+            for step, inputs in enumerate(dataloader):
+                loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+                if loss is not None:
+                    losses = loss.repeat(batch_size)
+                    losses_host = losses if losses_host is None else torch.cat((losses_host, losses), dim=0)
+                if logits is not None:
+                    preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
+                if labels is not None:
+                    labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
+                self.control = self.callback_handler.on_prediction_step(self.args, self.state, self.control)
+
+                # Gather all tensors and put them back on the CPU if we have done enough accumulation steps.
+                if self.args.eval_accumulation_steps is not None and (step + 1) % self.args.eval_accumulation_steps == 0:
+                    eval_losses_gatherer.add_arrays(self._gather_and_numpify(losses_host, "eval_losses"))
+                    if not prediction_loss_only:
+                        preds_gatherer.add_arrays(self._gather_and_numpify(preds_host, "eval_preds"))
+                        labels_gatherer.add_arrays(self._gather_and_numpify(labels_host, "eval_label_ids"))
+
+                    # Set back to None to begin a new accumulation
+                    losses_host, preds_host, labels_host = None, None, None
+
+            if self.args.past_index and hasattr(self, "_past"):
+                # Clean the state at the end of the evaluation loop
+                delattr(self, "_past")
+
+        # Gather all remaining tensors and put them back on the CPU
+        eval_losses_gatherer.add_arrays(self._gather_and_numpify(losses_host.reshape(len(self.adapter_setup), -1).mean(dim=0), "eval_losses"))
+        if not prediction_loss_only:
+            preds_gatherer.add_arrays(self._gather_and_numpify(preds_host.reshape(len(self.adapter_setup), -1).mean(dim=0), "eval_preds"))
+            labels_gatherer.add_arrays(self._gather_and_numpify(labels_host[:1000], "eval_label_ids"))
+
+        eval_loss = eval_losses_gatherer.finalize()
+        preds = preds_gatherer.finalize() if not prediction_loss_only else None
+        label_ids = labels_gatherer.finalize() if not prediction_loss_only else None
+
+        if self.compute_metrics is not None and preds is not None and label_ids is not None:
+            metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=label_ids))
+        else:
+            metrics = {}
+
+        # To be JSON-serializable, we need to remove numpy types or zero-d tensors
+        metrics = denumpify_detensorize(metrics)
+
+        if eval_loss is not None:
+            metrics[f"{metric_key_prefix}_loss"] = eval_loss.mean().item()
+
+        # Prefix all keys with metric_key_prefix + '_'
+        for key in list(metrics.keys()):
+            if not key.startswith(f"{metric_key_prefix}_"):
+                metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
+
+        return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
+
 
 
 class AdapterLangCallback(TrainerCallback):
