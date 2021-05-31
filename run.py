@@ -723,7 +723,7 @@ class AdapterLangCallback(TrainerCallback):
         if self.no_lang:
             setup = [*self.task_adapters]
         else:
-            setup = [ac.Split(train_lang1, train_lang2, split_index=config.get("max_seq_len", 50)), *self.task_adapters]
+            setup = [ac.Split(train_lang1, train_lang2, split_index=self.split_index), *self.task_adapters]
         model.set_active_adapters(setup, skip_layers=self.skip_layers)
         self.train_idx += 1
         self.train_idx = self.train_idx % len(self.pairs)
@@ -733,7 +733,7 @@ class AdapterLangCallback(TrainerCallback):
         if self.no_lang:
             setup = [*self.task_adapters]
         else:
-            setup = [ac.Split(test_lang1, test_lang2, split_index=config.get("max_seq_len", 50)), *self.task_adapters]
+            setup = [ac.Split(test_lang1, test_lang2, split_index=self.split_index), *self.task_adapters]
         model.set_active_adapters(setup, skip_layers=self.skip_layers)
         self.test_idx += 1
         self.test_idx = self.test_idx % len(self.pairs)
