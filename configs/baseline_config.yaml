@@ -1,14 +1,16 @@
-wandb_project: wmt21-qe # optional
+wandb_project: test # wmt21-qe # optional
 do_train: True
 output_dir: results/qe_da/testing
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
 report_to: all
+only_translations: False
+task_name: 'bert_base_6k_bs_16'
 #prompt: [original, translation]
 train:
   train_batchsize: 4 # should evenly divide 7000 for multi pair training to work with the current hack
   eval_batchsize: 4 # must evenly divide 1000 for multi pair training to work with the current hack
-  max_steps: 2500
+  max_steps: 6000
   logging_steps: 10
   eval_steps: 250
   gradient_accumulation_steps: 4
@@ -19,12 +21,20 @@ train:
     - [ en, de ]
     - [ en, zh ]
     - [ et, en ]
+    - [ ne, en ]
+    - [ ro, en ]
+    - [ ru, en ]
+    - [ si, en ]
 test:
   batchsize: 4
   pairs:
-    - [en, de]
-    - [en, zh]
-    - [et, en]
+    - [ en, de ]
+    - [ en, zh ]
+    - [ et, en ]
+    - [ ne, en ]
+    - [ ro, en ]
+    - [ ru, en ]
+    - [ si, en ]
 #    - [ne, en] #missing
 #   - [ro, en]
 #   - [ru, en]

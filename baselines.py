@@ -162,6 +162,9 @@ def load_data(lang_pairs, task, config):
         """Encodes a batch of input data using the model tokenizer."""
         original = batch["original"]
         translation = batch["translation"]
+        if config.get('only_translations', False):
+            sen2 = tokenizer(translation, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
+            return sen2
         if "prompt" in config:
             prompt_orig, prompt_transl = config["prompt"]
             original = [f"{prompt_orig}: {o}" for o in original]
