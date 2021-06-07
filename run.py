@@ -52,7 +52,8 @@ def train(config):
 
     model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
     model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
-
+    if model.model_name is None:
+        model.model_name = config.get("model_name", "xlm-roberta-base")
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
     adapter_config = AdapterConfig.load("pfeiffer", non_linearity="gelu", reduction_factor=config.get("reduction_factor", 16))
@@ -177,6 +178,8 @@ def test(config, model=None, task_folder=None):
         logging.info(f"Loading task adapter from {config['adapter_path']}")
         model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
         model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+        if model.model_name is None:
+            model.model_name = config.get("model_name", "xlm-roberta-base")
         if config.get("architecture", "base") == "split" or config.get("architecture", "base") == "tri":
             model.load_adapter(os.path.join(config["adapter_path"], task+"_original"), load_as=task+"_original")
             model.load_adapter(os.path.join(config["adapter_path"], task+"_translation"), load_as=task+"_translation")
@@ -373,6 +376,8 @@ def test_ensemble(config):
     logging.info(f"Loading task adapter from {config['adapter_path']}")
     model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1, hidden_dropout_prob=config.get("dropout", 0.1))
     model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+    if model.model_name is None:
+        model.model_name = config.get("model_name", "xlm-roberta-base")
     all_task_adapters = []
     architectures = config.get("architecture", "base")
     for i, adapter_path in enumerate(config['adapter_path']):
@@ -386,7 +391,7 @@ def test_ensemble(config):
             if architecture == "tri":
                 model.load_adapter(os.path.join(adapter_path, task+"_tri"), load_as=task+"_tri"+str(i))
         else:
-            model.load_adapter(os.path.join(config["adapter_path"], task), load_as=task+str(i))
+            model.load_adapter(os.path.join(adapter_path, task), load_as=task+str(i))
 
         if architecture == "split":
             task_adapter = ac.Split(task+"_original"+str(i), task+"_translation"+str(i), split_index=config.get("max_seq_len", 50))
