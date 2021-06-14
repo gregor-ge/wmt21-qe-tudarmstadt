@@ -21,6 +21,7 @@ from transformers.adapters.configuration import AdapterConfig
 from transformers.adapters.utils import resolve_adapter_path
 from transformers.trainer_pt_utils import nested_concat, DistributedTensorGatherer, SequentialDistributedSampler
 from transformers.trainer_utils import PredictionOutput, denumpify_detensorize
+from custom_head import BatchNormClassificationHead
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
@@ -60,15 +61,24 @@ def train(config):
     if config.get("architecture", "base") == "split":
         model.add_adapter(task+"_original", config=adapter_config)
         model.add_adapter(task+"_translation", config=adapter_config)
-        model.add_classification_head(task+"_original", num_labels=1)
+        if config.get('batch_norm', False):
+            model.add_prediction_head(BatchNormClassificationHead(model, task+"_original"))
+        else:
+            model.add_classification_head(task + "_original", num_labels=1)
     elif config.get("architecture", "base") == "tri":
         model.add_adapter(task+"_original", config=adapter_config)
         model.add_adapter(task+"_translation", config=adapter_config)
         model.add_adapter(task+"_tri", config=adapter_config)
-        model.add_classification_head(task+"_tri", num_labels=1)
+        if config.get('batch_norm', False):
+            model.add_prediction_head(BatchNormClassificationHead(model, task+"_tri"))
+        else:
+            model.add_classification_head(task + "_tri", num_labels=1)
     else:
         model.add_adapter(task, config=adapter_config)
-        model.add_classification_head(task, num_labels=1)
+        if config.get('batch_norm', False):
+            model.add_prediction_head(BatchNormClassificationHead(model, task))
+        else:
+            model.add_classification_head(task, num_labels=1)
 
     train_config = config["train"]
     is_multipair = not isinstance(train_config["pair"][0], str)
