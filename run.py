@@ -22,6 +22,7 @@ from transformers.adapters.utils import resolve_adapter_path
 from transformers.trainer_pt_utils import nested_concat, DistributedTensorGatherer, SequentialDistributedSampler
 from transformers.trainer_utils import PredictionOutput, denumpify_detensorize
 from custom_head import BatchNormClassificationHead
+import pandas as pd
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
@@ -37,6 +38,8 @@ def main(config):
     os.environ["WANDB_WATCH"] = "false"
     if config.get("wandb_project", ""):
         os.environ["WANDB_PROJECT"] = config["wandb_project"]
+    if config.get('predict', False):
+        return predict(config)
     if config.get("do_train", True):
         train(config)
     else:
@@ -178,6 +181,84 @@ def train(config):
         model.save_adapter(best_checkpoint, task)
     test(config, model, task_folder)
 
+def predict_ensemble(config):
+    pass
+
+
+def predict(config, task_folder=None):
+    task = config["task"]
+    assert task == "qe_da" or task == "qe_hter"
+    if isinstance(config['adapter_path'], list):
+        return predict_ensemble(config)
+    logging.info(f"Loading task adapter from {config['adapter_path']}")
+    model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1,
+                                              hidden_dropout_prob=config.get("dropout", 0.1))
+    model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+    if model.model_name is None:
+        model.model_name = config.get("model_name", "xlm-roberta-base")
+    if config.get("architecture", "base") == "split" or config.get("architecture", "base") == "tri":
+        model.load_adapter(os.path.join(config["adapter_path"], task + "_original"), load_as=task + "_original")
+        model.load_adapter(os.path.join(config["adapter_path"], task + "_translation"), load_as=task + "_translation")
+        if config.get("architecture", "base") == "tri":
+            model.load_adapter(os.path.join(config["adapter_path"], task + "_tri"), load_as=task + "_tri")
+    else:
+        model.load_adapter(os.path.join(config["adapter_path"], task), load_as=task)
+    if not task_folder:
+        task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+    output_dir = os.path.join(os.path.dirname(config['adapter_path']), 'submissions')
+    os.makedirs(output_dir, exist_ok=True)
+    logging.info(f"Saving results in {output_dir}")
+    yaml.dump(config, open(os.path.join(output_dir, "prediction_config.yaml"), "w"))
+    results = {"dev": [], "test": [], "task": task}
+    for pair in config["test"]["pairs"]:
+        lang1, lang2 = pair
+        logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
+        load_lang_adapter(model, lang1, config)
+        load_lang_adapter(model, lang2, config)
+        dataset = load_data(pair, task, config)
+        skip_layer = []
+        if config.get("architecture", "base") == "split":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
+        elif config.get("architecture", "base") == "tri":
+            task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50)),
+                            task+"_tri"]
+        else:
+            task_adapter = [task]
+        if config.get("no_lang", False):
+            setup = [*task_adapter]
+        else:
+            setup = [ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), *task_adapter]
+        model.set_active_adapters(setup, skip_layers=skip_layer)
+        test_trainer = Trainer(
+            model=model,
+            args=TrainingArguments(output_dir=output_dir,
+                                   remove_unused_columns=False,
+                                   per_device_eval_batch_size=config["test"]["batchsize"],
+                                   run_name=task_folder,
+                                   report_to=config.get("report_to", "all"),
+                                   skip_memory_metrics=config.get("skip_memory_metrics", True))
+        )
+        predicitons = test_trainer.predict(dataset["test"], metric_key_prefix="test")
+        z_scores = predicitons.predictions
+        save_submissions(z_scores, output_dir, pair, config['model'])
+        #test_evaluation["pair"] = f"{lang1}_{lang2}"
+        #results["test"].append(test_evaluation)
+        logging.info(results)
+
+
+def save_submissions(scores, file_path, lang_pair, method_name):
+    lines = []
+    file_name = os.path.join(file_path, 'predictions_' + lang_pair[0] + '_' + lang_pair[1] + '.txt')
+    for i, score in enumerate(scores.tolist()):
+        language_pair = lang_pair[0] + '-' + lang_pair[1]
+        segment_score = str(score[0])
+        line = '\t'.join([language_pair, method_name, str(i), segment_score])
+        lines.append(line)
+    with open(file_name, "w") as f:
+        for entry in lines:
+            f.writelines('%s\n' % entry)
+    print(file_name)
+
 
 def test(config, model=None, task_folder=None):
     task = config["task"]
@@ -288,7 +369,23 @@ def load_data(lang_pairs, task, config):
         lang_pairs = [lang_pairs]
     tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
-    if task == "qe_da":
+    if config.get('predict', False):
+        if lang_pairs[0] in [['en', 'cs'], ['en', 'ja'], ['km', 'en'], ['ps', 'en']]:
+            original = [pd.read_csv(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.src", delimiter="\t", header=None)
+                        for(lang1, lang2) in lang_pairs]
+            translation = [pd.read_csv(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.mt", delimiter="\t", header=None)
+                           for(lang1, lang2) in lang_pairs]
+        else:
+            original = [pd.read_csv(f"data/blind_data/test-blind/{lang1}-{lang2}-test-blind/test21.src", delimiter="\t", header=None)
+                    for(lang1, lang2) in lang_pairs]
+            translation = [pd.read_csv(f"data/blind_data/test-blind/{lang1}-{lang2}-test-blind/test21.mt", delimiter="\t", header=None)
+                       for (lang1, lang2) in lang_pairs]
+        df = pd.concat((original[0], translation[0]), axis=1)
+        df.columns = ['original', 'translation']
+        dataset = DatasetDict({'test': Dataset.from_pandas(df)})
+
+
+    if task == "qe_da" and not config.get('predict', False):
         dataset = load_dataset("csv", delimiter="\t", quoting=3, data_files={
             "train": [f"data/data/direct-assessments/train/{lang1}-{lang2}-train/train.{lang1}{lang2}.df.short.tsv" for (lang1, lang2) in lang_pairs],
             "test": [f"data/data/direct-assessments/test/{lang1}-{lang2}/test20.{lang1}{lang2}.df.short.tsv" for (lang1, lang2) in lang_pairs],
@@ -358,14 +455,24 @@ def load_data(lang_pairs, task, config):
             return sen1
         return _encode
     # Encode the input data
-    dataset["train"] = dataset["train"].map(encode(True, lang_pairs), batched=True, batch_size=7000*len(lang_pairs))
-    dataset["test"] = dataset["test"].map(encode(False, lang_pairs), batched=True, batch_size=1000*len(lang_pairs))
-    dataset["dev"] = dataset["dev"].map(encode(False, lang_pairs), batched=True, batch_size=1000*len(lang_pairs))
+    if config.get('predict', False):
+        dataset["test"] = dataset["test"].map(encode(False, lang_pairs), batched=True,
+                                              batch_size=1000 * len(lang_pairs))
+    else:
+        dataset["train"] = dataset["train"].map(encode(True, lang_pairs), batched=True, batch_size=7000*len(lang_pairs))
+        dataset["test"] = dataset["test"].map(encode(False, lang_pairs), batched=True, batch_size=1000*len(lang_pairs))
+        dataset["dev"] = dataset["dev"].map(encode(False, lang_pairs), batched=True, batch_size=1000*len(lang_pairs))
     # Transform to pytorch tensors and only output the required columns
     if "xlm" in config.get("model", "xlm-roberta-base"):
-        dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
+        if config.get('predict', False):
+            dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
+        else:
+            dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "label"])
     else:
-        dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "token_type_ids", "label"])
+        if config.get('predict', False):
+            dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "token_type_ids"])
+        else:
+            dataset.set_format(type="torch", columns=["input_ids", "attention_mask", "token_type_ids", "label"])
     return dataset
 
 
