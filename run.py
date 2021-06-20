@@ -23,6 +23,7 @@ from transformers.trainer_pt_utils import nested_concat, DistributedTensorGather
 from transformers.trainer_utils import PredictionOutput, denumpify_detensorize
 from custom_head import BatchNormClassificationHead
 import pandas as pd
+import matplotlib.pyplot as plt
 
 logging.basicConfig(format='%(asctime)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S',
@@ -182,7 +183,73 @@ def train(config):
     test(config, model, task_folder)
 
 def predict_ensemble(config):
-    pass
+    task = config["task"]
+    assert task == "qe_da" or task == "qe_hter"
+    logging.info(f"Loading task adapter from {config['adapter_path']}")
+    model_config = AutoConfig.from_pretrained(config.get("model", "xlm-roberta-base"), num_labels=1,
+                                              hidden_dropout_prob=config.get("dropout", 0.1))
+    model = AutoModelWithHeads.from_pretrained(config.get("model", "xlm-roberta-base"), config=model_config)
+    if model.model_name is None:
+        model.model_name = config.get("model_name", "xlm-roberta-base")
+    all_task_adapters = []
+    architectures = config.get("architecture", "base")
+    for i, adapter_path in enumerate(config['adapter_path']):
+        if isinstance(architectures, list):
+            architecture = architectures[i]
+        else:
+            architecture = architectures
+        if architecture == "split" or architecture == "tri":
+            model.load_adapter(os.path.join(adapter_path, task + "_original"), load_as=task + "_original" + str(i))
+            model.load_adapter(os.path.join(adapter_path, task + "_translation"),
+                               load_as=task + "_translation" + str(i))
+            if architecture == "tri":
+                model.load_adapter(os.path.join(adapter_path, task + "_tri"), load_as=task + "_tri" + str(i))
+        else:
+            model.load_adapter(os.path.join(adapter_path, task), load_as=task + str(i))
+
+        if architecture == "split":
+            task_adapter = ac.Split(task + "_original" + str(i), task + "_translation" + str(i),
+                                    split_index=config.get("max_seq_len", 50))
+        elif architecture == "tri":
+            task_adapter = [ac.Split(task + "_original" + str(i), task + "_translation" + str(i),
+                                     split_index=config.get("max_seq_len", 50)),
+                            task + "_tri" + str(i)]
+        else:
+            task_adapter = task + str(i)
+        all_task_adapters.append(task_adapter)
+
+    task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+    output_dir = os.path.join(os.path.dirname(config['adapter_path'][0]), 'submissions')
+    os.makedirs(output_dir, exist_ok=True)
+    logging.info(f"Saving results in {output_dir}")
+    yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
+    results = {"dev": [], "test": [], "task": task}
+    for pair in config["test"]["pairs"]:
+        lang1, lang2 = pair
+        logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
+        load_lang_adapter(model, lang1, config)
+        load_lang_adapter(model, lang2, config)
+        dataset = load_data(pair, task, config)
+
+        skip_layer = []  # [11] if config.get("madx2", False) else []
+        if config.get("no_lang", False):
+            setup = all_task_adapters
+        else:
+            setup = [[ac.Split(lang1, lang2, split_index=config.get("max_seq_len", 50)), a] for a in all_task_adapters]
+        #model.set_active_adapters(setup, skip_layers=skip_layer)
+        test_trainer = EnsembleTrainer(
+            model=model,
+            args=TrainingArguments(output_dir=output_dir,
+                                   remove_unused_columns=False,
+                                   per_device_eval_batch_size=config["test"]["batchsize"],
+                                   run_name=task_folder,
+                                   report_to=config.get("report_to", "all"),
+                                   skip_memory_metrics=config.get("skip_memory_metrics", True)),
+            adapter_setup=setup, weird_fix=True)
+        predictions = test_trainer.predict(dataset["test"], metric_key_prefix="test")
+        z_scores = predictions.predictions
+        save_submissions(z_scores, output_dir, pair, config['model'])
+    logging.info(results)
 
 
 def predict(config, task_folder=None):
@@ -215,7 +282,7 @@ def predict(config, task_folder=None):
         logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
         load_lang_adapter(model, lang1, config)
         load_lang_adapter(model, lang2, config)
-        dataset = load_data(pair, task, config)
+        dataset = load_data(pair, task, config, debug=False)
         skip_layer = []
         if config.get("architecture", "base") == "split":
             task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
@@ -238,8 +305,8 @@ def predict(config, task_folder=None):
                                    report_to=config.get("report_to", "all"),
                                    skip_memory_metrics=config.get("skip_memory_metrics", True))
         )
-        predicitons = test_trainer.predict(dataset["test"], metric_key_prefix="test")
-        z_scores = predicitons.predictions
+        predictions = test_trainer.predict(dataset["test"], metric_key_prefix="test")
+        z_scores = predictions.predictions
         save_submissions(z_scores, output_dir, pair, config['model'])
         #test_evaluation["pair"] = f"{lang1}_{lang2}"
         #results["test"].append(test_evaluation)
@@ -251,7 +318,7 @@ def save_submissions(scores, file_path, lang_pair, method_name):
     file_name = os.path.join(file_path, 'predictions_' + lang_pair[0] + '_' + lang_pair[1] + '.txt')
     for i, score in enumerate(scores.tolist()):
         language_pair = lang_pair[0] + '-' + lang_pair[1]
-        segment_score = str(score[0])
+        segment_score = str(score[0]) if isinstance(score, list) else str(score)
         line = '\t'.join([language_pair, method_name, str(i), segment_score])
         lines.append(line)
     with open(file_name, "w") as f:
@@ -364,12 +431,12 @@ def load_lang_adapter(model, language, config):
         model.bert.embeddings.word_embeddings = new_embedding
 
 
-def load_data(lang_pairs, task, config):
+def load_data(lang_pairs, task, config, debug=False):
     if isinstance(lang_pairs[0], str):
         lang_pairs = [lang_pairs]
     tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
-    if config.get('predict', False):
+    if config.get('predict', False) and not debug:
         if lang_pairs[0] in [['en', 'cs'], ['en', 'ja'], ['km', 'en'], ['ps', 'en']]:
             original = [pd.read_csv(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.src", delimiter="\t", header=None)
                         for(lang1, lang2) in lang_pairs]
@@ -393,6 +460,21 @@ def load_data(lang_pairs, task, config):
         })
         # The transformers model expects the target class column to be named "labels"
         dataset = dataset.rename_column("z_mean", "label")
+
+    if debug:
+        def read_f(f, dt):
+            return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
+        train_hter, dev_hter, test_hter, train_src, dev_src, test_src, train_mt, dev_mt, test_mt = [], [], [], [], [], [], [], [], []
+        for (lang1, lang2) in lang_pairs:
+            da_scores = pd.read_csv(f"data/data/direct-assessments/test/{lang1}-{lang2}/test20.{lang1}{lang2}.df.short.tsv",
+                                    delimiter="\t", quoting=3)['z_mean']
+            test_hter.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.hter", float))
+            test_src.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.src", str))
+            test_mt.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.mt", str))
+        test = Dataset.from_dict({"original": test_src, "translation": test_mt}, split="test")
+        dataset = DatasetDict({"test": test})
+
+
 
     if task == "qe_hter":
         def read_f(f, dt):
@@ -572,7 +654,6 @@ def test_ensemble(config):
     json.dump(results, open(os.path.join(output_dir, f"evaluation_{task}.json"), "w"), indent=2)
 
 
-
 class CustomTrainer(Trainer):
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -705,9 +786,10 @@ class CustomTrainer(Trainer):
 
 
 class EnsembleTrainer(Trainer):
-    def __init__(self, adapter_setup=[], **kwargs):
+    def __init__(self, adapter_setup=[], weird_fix=False, **kwargs):
         super(EnsembleTrainer, self).__init__(**kwargs)
         self.adapter_setup = adapter_setup
+        self.weird_fix = weird_fix
 
     def prediction_loop(
             self,
@@ -715,7 +797,8 @@ class EnsembleTrainer(Trainer):
             description: str,
             prediction_loss_only: Optional[bool] = None,
             ignore_keys: Optional[List[str]] = None,
-            metric_key_prefix: str = "eval"
+            metric_key_prefix: str = "eval",
+            weird_fix = False
     ) -> PredictionOutput:
         """
         Prediction/evaluation loop, shared by :obj:`Trainer.evaluate()` and :obj:`Trainer.predict()`.
@@ -796,12 +879,14 @@ class EnsembleTrainer(Trainer):
                 delattr(self, "_past")
 
         # Gather all remaining tensors and put them back on the CPU
-        eval_losses_gatherer.add_arrays(self._gather_and_numpify(losses_host.reshape(len(self.adapter_setup), -1).mean(dim=0), "eval_losses"))
+        if not self.weird_fix:
+            eval_losses_gatherer.add_arrays(self._gather_and_numpify(losses_host.reshape(len(self.adapter_setup), -1).mean(dim=0), "eval_losses"))
         if not prediction_loss_only:
             preds_gatherer.add_arrays(self._gather_and_numpify(preds_host.reshape(len(self.adapter_setup), -1).mean(dim=0), "eval_preds"))
-            labels_gatherer.add_arrays(self._gather_and_numpify(labels_host[:1000], "eval_label_ids"))
+            if not self.weird_fix:
+                labels_gatherer.add_arrays(self._gather_and_numpify(labels_host[:1000], "eval_label_ids"))
 
-        eval_loss = eval_losses_gatherer.finalize()
+        eval_loss = eval_losses_gatherer.finalize() if not self.weird_fix else None
         preds = preds_gatherer.finalize() if not prediction_loss_only else None
         label_ids = labels_gatherer.finalize() if not prediction_loss_only else None
 
@@ -883,7 +968,27 @@ class MultiSampler(Sampler):
     def __len__(self) -> int:
         return self.max_rounds * self.max_get
 
+
+def check_predictions():
+    submissions = pd.read_csv(
+        "G:\\Meine Ablage\\Uni\Seminar\\results\\qe-da\\ensemble\\train_xlmrl_all_base_r8_bs8_lr1-4_seed1qe_da_2021-06-09_05-49\\submissions\\predictions_ro_en.txt",
+        delimiter='\t', header=None)
+    da_scores = pd.read_csv(f"data/data/direct-assessments/test/ro-en/test20.roen.df.short.tsv",
+                            delimiter="\t", quoting=3)['z_mean']
+    # plt.plot(da_scores, label='ground truth (z_mean)')
+    # plt.plot(submissions[3], label='predictions')
+    min_ = min(min(da_scores), min(submissions[3]))
+    max_ = max(max(da_scores), max(submissions[3]))
+    plt.xlim(min_, max_)
+    plt.ylim(min_, max_)
+    plt.scatter(x=submissions[3], y=da_scores)
+    plt.xlabel('predictions')
+    plt.ylabel('z_mean')
+    plt.legend()
+    plt.show()
+
 if __name__ == "__main__":
+    #check_predictions()
     parser = argparse.ArgumentParser()
     parser.add_argument("config")
     args = parser.parse_args()

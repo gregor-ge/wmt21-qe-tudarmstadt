@@ -2,7 +2,11 @@ wandb_project: wmt21-qe # optional
 do_train: False
 model: xlm-roberta-large #bert-base-multilingual-cased #xlm-roberta-large
 output_dir: results/qe_da/testing
-adapter_path: results\qe-da\architecture\train_xlmrl_en_zh_bs_8_red_16qe_da_2021-06-07_07-52\best_checkpoint
+adapter_path:
+   - G:\Meine Ablage\Uni\Seminar\results\qe-da\ensemble\train_xlmrl_all_base_r8_bs8_lr1-4_seed1qe_da_2021-06-09_05-49\best_checkpoint
+   - G:\Meine Ablage\Uni\Seminar\results\qe-da\ensemble\train_xlmrl_all_base_r8_bs8_lr1-4_seed2qe_da_2021-06-09_07-33\best_checkpoint
+   - G:\Meine Ablage\Uni\Seminar\results\qe-da\ensemble\train_xlmrl_all_base_r8_bs8_lr1-4_seed3qe_da_2021-06-09_09-18\best_checkpoint
+   - G:\Meine Ablage\Uni\Seminar\results\qe-da\ensemble\train_xlmrl_all_base_r8_bs8_lr1-4_seed4qe_da_2021-06-09_11-06\best_checkpoint
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
 report_to: none
@@ -29,6 +33,7 @@ train:
 test:
   batchsize: 32
   pairs:
-    - [en, cs]
-    - [en, de]
-    - [en, zh]
+    #- [en, cs]
+    - [ro, en]
+    #- [en, de]
+    #- [en, zh]
