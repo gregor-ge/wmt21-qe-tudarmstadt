@@ -5,23 +5,23 @@ output_dir: results/qe_da/testing
 adapter_path: C:\Users\Gregor\Google Drive\Uni\SS21\Seminar\colab\results\qe-da\hyper\train_enzh_bs32_lr1-4_2500_qe_da_2021-05-02_12-43\best_checkpoint\qe_da
 max_seq_len: 50
 task: qe_da   # qe_da = task 1, qe_hter = task 2
-report_to: none
+report_to: None
 madx2: False
 architecture: base
 reduction_factor: 8
 dropout: 0.1
 #prompt: [original, translation]
 train:
-  train_batchsize: 16 # should evenly divide 7000 for multi pair training to work with the current hack
+  train_batchsize: 32 # should evenly divide 7000 for multi pair training to work with the current hack
   eval_batchsize: 50 # must evenly divide 1000 for multi pair training to work with the current hack
-  max_steps: 10
+  max_steps: 2500
   logging_steps: 10
   eval_steps: 250
   gradient_accumulation_steps: 1
   save_total_limit: 2
   amp: True
   epochs: 1
-  pair: [en, zh] # list of pairs or just a pair
+  pair: [en, de] # list of pairs or just a pair
     #- [en, de]
     #- [en, zh]
 test:
