@@ -219,11 +219,11 @@ def predict_ensemble(config):
         all_task_adapters.append(task_adapter)
 
     task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
-    output_dir = os.path.join(os.path.dirname(config['adapter_path'][0]), 'submissions')
+    output_dir = os.path.join(os.path.dirname(config['output_dir']), 'submissions')
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "test_config.yaml"), "w"))
-    results = {"dev": [], "test": [], "task": task}
+    scores = []
     for pair in config["test"]["pairs"]:
         lang1, lang2 = pair
         logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
@@ -248,8 +248,8 @@ def predict_ensemble(config):
             adapter_setup=setup, weird_fix=True)
         predictions = test_trainer.predict(dataset["test"], metric_key_prefix="test")
         z_scores = predictions.predictions
-        save_submissions(z_scores, output_dir, pair, config['model'])
-    logging.info(results)
+        scores.append(z_scores)
+    save_submissions(scores, output_dir, config["test"]["pairs"], config['task_name'], model)
 
 
 def predict(config, task_folder=None):
@@ -272,11 +272,11 @@ def predict(config, task_folder=None):
         model.load_adapter(os.path.join(config["adapter_path"], task), load_as=task)
     if not task_folder:
         task_folder = f"test_{config.get('task_name', '')}_{config['task']}{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
-    output_dir = os.path.join(os.path.dirname(config['adapter_path']), 'submissions')
+    output_dir = os.path.join(os.path.dirname(config['output_dir']), 'submissions')
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Saving results in {output_dir}")
     yaml.dump(config, open(os.path.join(output_dir, "prediction_config.yaml"), "w"))
-    results = {"dev": [], "test": [], "task": task}
+    scores = []
     for pair in config["test"]["pairs"]:
         lang1, lang2 = pair
         logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
@@ -307,20 +307,28 @@ def predict(config, task_folder=None):
         )
         predictions = test_trainer.predict(dataset["test"], metric_key_prefix="test")
         z_scores = predictions.predictions
-        save_submissions(z_scores, output_dir, pair, config['model'])
-        #test_evaluation["pair"] = f"{lang1}_{lang2}"
-        #results["test"].append(test_evaluation)
-        logging.info(results)
+        scores.append(z_scores)
+    save_submissions(scores, output_dir, config["test"]["pairs"], config['task_name'], model)
 
 
-def save_submissions(scores, file_path, lang_pair, method_name):
+def save_submissions(all_scores, file_path, lang_pairs, method_name, model):
     lines = []
-    file_name = os.path.join(file_path, 'predictions_' + lang_pair[0] + '_' + lang_pair[1] + '.txt')
-    for i, score in enumerate(scores.tolist()):
-        language_pair = lang_pair[0] + '-' + lang_pair[1]
-        segment_score = str(score[0]) if isinstance(score, list) else str(score)
-        line = '\t'.join([language_pair, method_name, str(i), segment_score])
-        lines.append(line)
+    tensor_list = list(model.state_dict().items())
+    total_params = 0
+    for layer_tensor_name, tensor in tensor_list:
+        if "pooler" in layer_tensor_name:
+            continue
+        print('Layer {}: {} elements'.format(layer_tensor_name, torch.numel(tensor)))
+        total_params += torch.numel(tensor)
+    lines.append(str(4*total_params))
+    lines.append(str(total_params))
+    file_name = os.path.join(file_path, 'predictions_' + method_name + '.txt')
+    for scores, lang_pair in zip(all_scores, lang_pairs):
+        for i, score in enumerate(scores.tolist()):
+            language_pair = lang_pair[0] + '-' + lang_pair[1]
+            segment_score = str(score[0]) if isinstance(score, list) else str(score)
+            line = '\t'.join([language_pair, method_name, str(i), segment_score])
+            lines.append(line)
     with open(file_name, "w") as f:
         for entry in lines:
             f.writelines('%s\n' % entry)
@@ -426,6 +434,7 @@ def load_lang_adapter(model, language, config):
         added_embeddings = torch.load(os.path.join(path, "pytorch_model_embeddings.bin"))["bert.embeddings.word_embeddings.weight"].to(model.device)
         current_emb_len = model.bert.embeddings.word_embeddings.num_embeddings
         config["token_offset"][LANG_TO_OFFSET[language]] = current_emb_len
+        logging.info(f"Extend embedding {language}, {added_embeddings.shape[0]}")
         new_embedding = Embedding(current_emb_len+added_embeddings.shape[0], added_embeddings.shape[1], padding_idx=0)
         new_embedding.weight.data = torch.cat([model.bert.embeddings.word_embeddings.weight.data, added_embeddings])
         model.bert.embeddings.word_embeddings = new_embedding
