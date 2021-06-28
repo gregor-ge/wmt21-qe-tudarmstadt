@@ -446,19 +446,18 @@ def load_data(lang_pairs, task, config, debug=False):
     tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
     if config.get('predict', False) and not debug:
-        if lang_pairs[0] in [['en', 'cs'], ['en', 'ja'], ['km', 'en'], ['ps', 'en']]:
-            original = [pd.read_csv(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.src", delimiter="\t", header=None)
-                        for(lang1, lang2) in lang_pairs]
-            translation = [pd.read_csv(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.mt", delimiter="\t", header=None)
-                           for(lang1, lang2) in lang_pairs]
-        else:
-            original = [pd.read_csv(f"data/blind_data/test-blind/{lang1}-{lang2}-test-blind/test21.src", delimiter="\t", header=None)
-                    for(lang1, lang2) in lang_pairs]
-            translation = [pd.read_csv(f"data/blind_data/test-blind/{lang1}-{lang2}-test-blind/test21.mt", delimiter="\t", header=None)
-                       for (lang1, lang2) in lang_pairs]
-        df = pd.concat((original[0], translation[0]), axis=1)
-        df.columns = ['original', 'translation']
-        dataset = DatasetDict({'test': Dataset.from_pandas(df)})
+        def read_f(f, dt):
+            return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
+        test_mt, test_src = [], []
+        for(lang1, lang2) in lang_pairs:
+            if [lang1, lang2] in [['en', 'cs'], ['en', 'ja'], ['km', 'en'], ['ps', 'en']]:
+                test_src.extend(read_f(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.src", str))
+                test_mt.extend(read_f(f"data/blind_data/zero-shot/{lang1}-{lang2}-test21/test21.mt", str))
+            else:
+                test_src.extend(read_f(f"data/blind_data/test-blind/{lang1}-{lang2}-test-blind/test21.src", str))
+                test_mt.extend(read_f(f"data/blind_data/test-blind/{lang1}-{lang2}-test-blind/test21.mt", str))
+        dtest = Dataset.from_dict({"original": test_src, "translation": test_mt}, split="test")
+        dataset = DatasetDict({"test": dtest})
 
 
     if task == "qe_da" and not config.get('predict', False):
