@@ -514,6 +514,16 @@ def load_data(lang_pairs, task, config, debug=False):
                 original = [f"{prompt_orig}: {o}" for o in original]
                 translation = [f"{prompt_transl}: {t}" for t in translation]
 
+            if config.get('only_translations', False):
+                sen2 = tokenizer(translation, max_length=config.get("max_seq_len", 50), truncation=True,
+                                 padding="max_length")
+                return sen2
+
+            if config.get('only_source', False):
+                sen1 = tokenizer(original, max_length=config.get("max_seq_len", 50), truncation=True,
+                                 padding="max_length")
+                return sen1
+
             sen1 = tokenizer(original, max_length=config.get("max_seq_len", 50), truncation=True, padding="max_length")
             if config.get("extend_embeddings", False):
                 factor = 7000 if is_train else 1000
