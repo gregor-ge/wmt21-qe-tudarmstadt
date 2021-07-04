@@ -440,12 +440,12 @@ def load_lang_adapter(model, language, config):
         model.bert.embeddings.word_embeddings = new_embedding
 
 
-def load_data(lang_pairs, task, config, debug=False):
+def load_data(lang_pairs, task, config):
     if isinstance(lang_pairs[0], str):
         lang_pairs = [lang_pairs]
     tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
-    if config.get('predict', False) and not debug:
+    if config.get('predict', False) and not config.get('debug', False):
         def read_f(f, dt):
             return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
         test_mt, test_src = [], []
@@ -469,7 +469,7 @@ def load_data(lang_pairs, task, config, debug=False):
         # The transformers model expects the target class column to be named "labels"
         dataset = dataset.rename_column("z_mean", "label")
 
-    if debug:
+    if config.get('debug', False):
         def read_f(f, dt):
             return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
         train_hter, dev_hter, test_hter, train_src, dev_src, test_src, train_mt, dev_mt, test_mt = [], [], [], [], [], [], [], [], []
