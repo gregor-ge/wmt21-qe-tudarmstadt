@@ -19,10 +19,10 @@ def parse(root, folders):
         folder = os.path.join(root, f)
         res = json.load(open(os.path.join(folder, "evaluation_qe_da.json")))
 
-        dev_res = [0]*len(ordering)
-        for r in res["dev"]:
-            dev_res[ordering[r["pair"]]] = r["dev_pearson"]
-        devs.append(",".join([f"{p:.4f}" for p in dev_res]))
+        # dev_res = [0]*len(ordering)
+        # for r in res["dev"]:
+        #     dev_res[ordering[r["pair"]]] = r["dev_pearson"]
+        # devs.append(",".join([f"{p:.4f}" for p in dev_res]))
 
         test_res = [0]*len(ordering)
         for r in res["test"]:
@@ -30,14 +30,15 @@ def parse(root, folders):
         tests.append(",".join([f"{p:.4f}" for p in test_res]))
 
     print("\n".join(folders))
-    print("DEV")
-    print("\n".join(devs))
+    # print("DEV")
+    # print("\n".join(devs))
     print("TEST")
     print("\n".join(tests))
 
 
 if __name__ == "__main__":
-    root = r"E:\Programming\wmt2021-qe\results\from_drive\architecture"
+
+    root = r"E:\Programming\wmt2021-qe\results\sanity"
     folders = list(os.listdir(root))
     print(",".join(ordering.keys()))
     parse(root, folders)
