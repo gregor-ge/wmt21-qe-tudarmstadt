@@ -449,7 +449,7 @@ def load_data(lang_pairs, task, config):
         lang_pairs = [lang_pairs]
     tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
-    if config.get('predict', False) and not config.get('debug', False) and config.get('boosting', False):
+    if config.get('predict', False) and not config.get('debug', False) and not config.get('boosting', False):
         def read_f(f, dt):
             return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
         test_mt, test_src = [], []
