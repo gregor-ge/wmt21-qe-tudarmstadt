@@ -252,7 +252,7 @@ def predict_ensemble(config):
     save_submissions(scores, output_dir, config["test"]["pairs"], config['task_name'], model)
 
 
-def predict(config, task_folder=None):
+def predict(config, task_folder=None, save=True):
     task = config["task"]
     assert task == "qe_da" or task == "qe_hter"
     if isinstance(config['adapter_path'], list):
@@ -275,14 +275,15 @@ def predict(config, task_folder=None):
     output_dir = os.path.join(os.path.dirname(config['output_dir']), 'submissions')
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Saving results in {output_dir}")
-    yaml.dump(config, open(os.path.join(output_dir, "prediction_config.yaml"), "w"))
+    if save:
+        yaml.dump(config, open(os.path.join(output_dir, "prediction_config.yaml"), "w"))
     scores = []
     for pair in config["test"]["pairs"]:
         lang1, lang2 = pair
         logging.info(f"Evaluation results for {task} {lang1}-{lang2}")
         load_lang_adapter(model, lang1, config)
         load_lang_adapter(model, lang2, config)
-        dataset = load_data(pair, task, config, debug=False)
+        dataset = load_data(pair, task, config)
         skip_layer = []
         if config.get("architecture", "base") == "split":
             task_adapter = [ac.Split(task+"_original", task+"_translation", split_index=config.get("max_seq_len", 50))]
@@ -308,7 +309,10 @@ def predict(config, task_folder=None):
         predictions = test_trainer.predict(dataset["test"], metric_key_prefix="test")
         z_scores = predictions.predictions
         scores.append(z_scores)
-    save_submissions(scores, output_dir, config["test"]["pairs"], config['task_name'], model)
+    if save:
+        save_submissions(scores, output_dir, config["test"]["pairs"], config['task_name'], model)
+    else:
+        return scores, config["test"]["pairs"]
 
 
 def save_submissions(all_scores, file_path, lang_pairs, method_name, model):
@@ -445,7 +449,7 @@ def load_data(lang_pairs, task, config):
         lang_pairs = [lang_pairs]
     tokenizer = AutoTokenizer.from_pretrained(config.get("model", "xlm-roberta-base"))
 
-    if config.get('predict', False) and not config.get('debug', False):
+    if config.get('predict', False) and not config.get('debug', False) and config.get('boosting', False):
         def read_f(f, dt):
             return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
         test_mt, test_src = [], []
@@ -460,7 +464,7 @@ def load_data(lang_pairs, task, config):
         dataset = DatasetDict({"test": dtest})
 
 
-    if task == "qe_da" and not config.get('predict', False):
+    if task == "qe_da" and not config.get('predict', False) and not config.get('debug', False):
         dataset = load_dataset("csv", delimiter="\t", quoting=3, data_files={
             "train": [f"data/data/direct-assessments/train/{lang1}-{lang2}-train/train.{lang1}{lang2}.df.short.tsv" for (lang1, lang2) in lang_pairs],
             "test": [f"data/data/direct-assessments/test/{lang1}-{lang2}/test20.{lang1}{lang2}.df.short.tsv" for (lang1, lang2) in lang_pairs],
@@ -474,14 +478,35 @@ def load_data(lang_pairs, task, config):
             return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
         train_hter, dev_hter, test_hter, train_src, dev_src, test_src, train_mt, dev_mt, test_mt = [], [], [], [], [], [], [], [], []
         for (lang1, lang2) in lang_pairs:
+
             da_scores = pd.read_csv(f"data/data/direct-assessments/test/{lang1}-{lang2}/test20.{lang1}{lang2}.df.short.tsv",
                                     delimiter="\t", quoting=3)['z_mean']
-            test_hter.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.hter", float))
-            test_src.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.src", str))
-            test_mt.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.mt", str))
+            #test_hter.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.hter", float))
+            #test_src.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.src", str))
+            #test_mt.extend(read_f(f"data/data/post-editing/test/{lang1}-{lang2}-test20/test20.mt", str))
         test = Dataset.from_dict({"original": test_src, "translation": test_mt}, split="test")
-        dataset = DatasetDict({"test": test})
+        dataset = load_dataset("csv", delimiter="\t", quoting=3, data_files={
+            "test": [f"data/data/direct-assessments/test/{lang1}-{lang2}/test20.{lang1}{lang2}.df.short.tsv" for
+                     (lang1, lang2) in lang_pairs]
+        })
+        #dataset = DatasetDict({"test": test})
 
+    if config.get('boosting', False):
+        def read_f(f, dt):
+            return [dt(l.strip()) for l in open(f, encoding="utf-8").readlines()]
+        train_hter, dev_hter, test_hter, train_src, dev_src, test_src, train_mt, dev_mt, test_mt = [], [], [], [], [], [], [], [], []
+        for (lang1, lang2) in lang_pairs:
+            da_scores = pd.read_csv(f"data/data/direct-assessments/dev/{lang1}-{lang2}-dev/dev.{lang1}{lang2}.df.short.tsv",
+                                    delimiter="\t", quoting=3)['z_mean']
+            test_hter.extend(read_f(f"data/data/post-editing/dev/{lang1}-{lang2}-dev/dev.hter", float))
+            test_src.extend(read_f(f"data/data/post-editing/dev/{lang1}-{lang2}-dev/dev.src", str))
+            test_mt.extend(read_f(f"data/data/post-editing/dev/{lang1}-{lang2}-dev/dev.mt", str))
+        dev = Dataset.from_dict({"original": test_src, "translation": test_mt}, split="test")
+        dataset = DatasetDict({"test": dev})
+        dataset = load_dataset("csv", delimiter="\t", quoting=3, data_files={
+            "test": [f"data/data/direct-assessments/train/{lang1}-{lang2}-train/train.{lang1}{lang2}.df.short.tsv" for
+                     (lang1, lang2) in lang_pairs]
+        })
 
 
     if task == "qe_hter":
