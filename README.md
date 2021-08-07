@@ -7,9 +7,18 @@ Please cite [UNKs Everywhere: Adapting Multilingual Language Models to New Scrip
 and [MAD-X: An Adapter-Based Framework for Multi-Task Cross-Lingual Transfer](https://arxiv.org/abs/2005.00052) if you use them.
 
 ## Installation
+Since our implementation relies on the use of adapters, the framework must be present on the system. It can be installed by running
+```
+pip install adapter-transformers
+```
+Further information on installing the adaper framework can be found on https://adapterhub.ml/.
+
 
 ## Usage
 Our model can be run by passing a config.yaml file containing all hyperparameters to the run.py's main method.
+```
+python run.py configs/config.yaml
+```
 
 An exemplary config.yaml can be found below:
 ```
