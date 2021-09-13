@@ -14,6 +14,11 @@ pip install adapter-transformers
 Further information on installing the adaper framework can be found on https://adapterhub.ml/.
 
 
+## Use Fine-Tuned Adapters
+We release our trained adapters for XLM-R (base & large) and mBERT (trained with language adapters + additional embeddings) on [AdapterHub](https://adapterhub.ml/explore/quality_estimation/wmt21/)
+and on [Hugging Face Hub](https://huggingface.co/models?other=adapterhub:quality_estimation/wmt21).
+
+
 ## Usage
 Our model can be run by passing a config.yaml file containing all hyperparameters to the run.py's main method.
 ```
